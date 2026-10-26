@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from sdlc.domain import prepare_input
-from sdlc.providers import CompatibleProvider, list_samples
+from sdlc.providers import CompatibleProvider, GeminiProvider, list_samples
 from sdlc.service import Service, ServiceError
 
 
@@ -83,12 +83,15 @@ def new_run(service: Service, operator: str) -> None:
     configured = True
     confirmed = True
     if mode == "模型生成":
+        vendor = st.selectbox("模型服务", ["Google Gemini", "其他兼容接口"], key="model_vendor")
         try:
-            provider = CompatibleProvider()
+            provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
             st.json(provider.config)
         except ValueError as error:
             configured = False
             st.warning(str(error))
+        if vendor == "Google Gemini":
+            st.caption("默认与桌宠相同的 gemini-3.5-flash-lite。免费层受 Google 项目配额限制，不自动开通计费；免费层输入可能用于改进产品，仅使用虚构数据。")
         confirmed = st.checkbox("确认将本次 PRD 发送至上述配置地址，并承担可能的调用费用", key="model_confirm")
         st.caption("配置环境变量后重启应用。一次生成发送一个请求，不自动重试；输出须人工审核。")
     else:

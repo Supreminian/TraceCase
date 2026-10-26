@@ -55,7 +55,7 @@ python3 -m venv .venv
 
 测试使用临时 SQLite，不修改演示数据库，不访问实际模型。包含 Streamlit AppTest 的完整逐条审核、导出及修订失效流程。
 
-本次本地验证：105 项测试通过，静态检查和数据集结构/哈希校验通过。具体范围与限制见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。
+本次本地验证：108 项测试通过，静态检查和数据集结构/哈希校验通过。具体范围与限制见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。
 
 评测命令、原始记录与人工评分格式见 [docs/EVALUATION.md](docs/EVALUATION.md)。`evaluation/call-plan.draft.json` 只是 120 条计划，不能称为 120 条执行结果。人工核对并明确冻结标准后，才开展 Prompt 调优和正式实验。CLI 任何命令都不会付费调用模型。
 
@@ -94,3 +94,23 @@ python3 -m venv .venv
 返回格式不兼容、认证失败、限流或超时会保存失败运行；截断响应保留原始文本但不准审批。选型完成前没有远端真实调用验证。协议参考 [Chat Completions 官方 API](https://developers.openai.com/api/reference/resources/chat)。
 
 上线后的并发、认证授权、任务队列、预算、数据隔离与压测计划见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。该文档是后续实施设计，当前版本仍面向单机使用。
+
+## Google Gemini（与桌宠相同模型）
+
+已接入 `gemini-3.5-flash-lite`，使用 Google 官方 Chat Completions 兼容端点，开启 JSON 对象输出。它与桌宠 SummerTheCat v30 当前保存的模型一致。
+
+在 macOS 上复用桌宠的现有钥匙串凭据：
+
+```bash
+.venv/bin/python scripts/run_google.py
+```
+
+启动器读取钥匙串服务 `local.summerthecat.v30.gemini` 的 `api-key`，只注入当前进程的 `GEMINI_API_KEY`，不复制到磁盘、不修改桌宠。钥匙串不可用时明确退出。已有环境变量 `GEMINI_API_KEY` / `GOOGLE_API_KEY` 时优先使用它；其他系统可自行设置密钥后按普通方式启动。`GEMINI_MODEL` 可以显式修改型号，不自动替换模型。
+
+在页面选择“模型生成”→“Google Gemini”，核对模型并确认发送后，可粘贴/上传自定义虚构 PRD。原有逐条审批与导出门禁保持生效。密钥不进入页面、SQLite、导出或提交。
+
+免费层不是客户端开关：该型号在 Google 官方价格表列有免费层，是否免费由对应 Google 项目计费层与额度决定；程序不开通计费、无付费模型回退，429 时保留失败记录，不自动重试。免费层数据可能用于改进 Google 产品，仅发送虚构数据。
+
+2026-10-26 验证：108 项本地测试通过；使用现有钥匙串凭据成功查询 Google 模型元数据，确认型号存在并支持 generateContent。未发送实际生成请求，未证明账户计费层或完成真实生成质量评测。
+
+依据：[Google 兼容接口](https://ai.google.dev/gemini-api/docs/openai)、[Gemini 免费层与价格](https://ai.google.dev/gemini-api/docs/pricing)。

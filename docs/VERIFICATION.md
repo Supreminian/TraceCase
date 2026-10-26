@@ -4,7 +4,7 @@
 
 | 实际执行 | 结果 |
 | --- | --- |
-| `python -m pytest -q` | 105 passed（包括 4 个 Streamlit AppTest 页面流程） |
+| `python -m pytest -q` | 108 passed（包括 4 个 Streamlit AppTest 页面流程） |
 | `ruff check .` | All checks passed |
 | `python -m evaluation.cli validate` | 20 个样本；dev 12、holdout 8；哈希与标准结构通过；仍为待人工审核草稿 |
 | `python -m pip check` | No broken requirements found |
@@ -23,3 +23,9 @@
 - M2 的 20 份候选标准由 AI 起草，尚未经人逐份审核或冻结。120 条只是调用计划，没有模型输出或提升结论。
 - GitHub Actions 工作流已编写，仓库尚无远端；线上 Issue、PR、CI 运行没有完成证据。
 - 当前为本机单用户原型；结构校验不能替代语义复核，自报操作者不提供身份认证。
+
+## Gemini 接入补充
+
+已配置与桌宠一致的 gemini-3.5-flash-lite，启动器从既有 macOS 钥匙串读取凭据到进程环境，不写密钥文件。新增三项测试覆盖默认型号、密钥隔离、配置拒绝与 Google JSON 请求/Token 映射。
+
+2026-10-26 使用真实凭据查询模型元数据成功，返回 models/gemini-3.5-flash-lite，支持 generateContent。本次只做元数据查询，没有实际文本生成请求；真实用例质量、项目免费额度与计费状态尚未验证。

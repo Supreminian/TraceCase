@@ -76,12 +76,12 @@ class ProviderError(RuntimeError):
 class CompatibleProvider:
     """Non-streaming Chat Completions adapter, configured only from environment."""
 
-    def __init__(self):
+    def __init__(self, *, endpoint=None, model=None, key=None):
         import os
         from urllib.parse import urlsplit
 
-        endpoint = os.environ.get('SDLC_MODEL_URL', '').strip()
-        model = os.environ.get('SDLC_MODEL_NAME', '').strip()
+        endpoint = (os.environ.get('SDLC_MODEL_URL', '') if endpoint is None else endpoint).strip()
+        model = (os.environ.get('SDLC_MODEL_NAME', '') if model is None else model).strip()
         parts = urlsplit(endpoint)
         local = parts.hostname in {'127.0.0.1', 'localhost', '::1'}
         if (parts.scheme not in {'https', 'http'} or not parts.hostname
@@ -90,7 +90,7 @@ class CompatibleProvider:
             raise ValueError('SDLC_MODEL_URL 须为完整 HTTPS 接口地址；仅本机允许 HTTP，不允许凭据或查询参数。')
         if not model:
             raise ValueError('请设置 SDLC_MODEL_NAME。')
-        key = os.environ.get('SDLC_MODEL_API_KEY', '').strip()
+        key = (os.environ.get('SDLC_MODEL_API_KEY', '') if key is None else key).strip()
         if not local and not key:
             raise ValueError('远端模型需要环境变量 SDLC_MODEL_API_KEY。')
         if '\r' in key or '\n' in key:
@@ -119,6 +119,8 @@ class CompatibleProvider:
         payload = {'model': self.config['model'], 'stream': False,
                    'max_tokens': self.config['parameters']['max_tokens'],
                    'messages': [{'role': 'system', 'content': request['prompt']['rendered']}]}
+        if self.config['provider'] == 'google-gemini':
+            payload['response_format'] = {'type': 'json_object'}
         headers = {'Content-Type': 'application/json'}
         if self._key:
             headers['Authorization'] = 'Bearer ' + self._key
@@ -151,3 +153,21 @@ class CompatibleProvider:
             raise ProviderError('无法连接模型服务；请检查地址、网络和证书。') from None
         except (ValueError, KeyError, IndexError, TypeError):
             raise ProviderError('模型响应不是兼容的 Chat Completions JSON。') from None
+
+
+class GeminiProvider(CompatibleProvider):
+    """Google's documented compatibility endpoint; no paid fallback or model substitution."""
+
+    def __init__(self):
+        import os
+        import re
+
+        model = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash-lite').strip()
+        if not re.fullmatch(r'gemini-[A-Za-z0-9._-]{1,100}', model):
+            raise ValueError('GEMINI_MODEL 不是有效的 Gemini 模型 ID。')
+        key = os.environ.get('GEMINI_API_KEY', '').strip() or os.environ.get('GOOGLE_API_KEY', '').strip()
+        if not key:
+            raise ValueError('Google Gemini 尚未配置密钥。请通过 scripts/run_google.py 复用桌宠钥匙串，或设置 GEMINI_API_KEY 后重启。')
+        super().__init__(endpoint='https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+                         model=model, key=key)
+        self.config['provider'] = 'google-gemini'
