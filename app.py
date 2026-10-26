@@ -98,7 +98,7 @@ def new_run(service: Service, operator: str) -> None:
         st.info("固定样例模式 · 未调用模型。当前只接受与预置样例完全匹配的输入。")
     st.caption("仅使用虚构的费用报销数据。上传 .md / .markdown，最大 100 KiB；正文最多 20,000 字符。")
     if not operator.strip():
-        st.caption("开始前请展开左上角侧栏，填写操作者标识。")
+        st.caption("开始前请在页面上方填写操作者标识。")
     source = st.radio("输入方式", ["固定样例", "粘贴 Markdown", "上传 Markdown"],
                       horizontal=True, key="input_source")
     kwargs: dict = {}
@@ -126,6 +126,15 @@ def new_run(service: Service, operator: str) -> None:
     preview = left.button("检查输入与段落", width="stretch")
     generate = right.button("生成测试用例", type="primary", key="generate",
                             width="stretch", disabled=not operator.strip() or not configured or not confirmed)
+    reasons = []
+    if not operator.strip():
+        reasons.append("请填写页面上方的操作者标识")
+    if not configured:
+        reasons.append("请完成模型配置")
+    if not confirmed:
+        reasons.append("请勾选本次 PRD 的发送确认")
+    if reasons:
+        st.warning("生成按钮暂不可用：" + "；".join(reasons) + "。")
     fingerprint = hashlib.sha256(repr(kwargs).encode("utf-8")).hexdigest()
     if preview:
         try:
@@ -441,14 +450,13 @@ def main() -> None:
         st.caption("需求可追溯 · 人工逐条复核")
         page = st.radio("工作空间", PAGES, key="page")
         st.divider()
-        operator = st.text_input("操作者标识", key="operator", max_chars=64,
-                                 placeholder="例如：demo-reviewer")
-        if not operator.strip():
-            st.info("填写操作者标识后可生成、审核与导出。")
-        st.caption("这是自报标签，不是身份认证。")
+        st.caption("操作者标识在主页面填写，用于记录生成和审批操作。")
         st.divider()
         st.caption("样例回放 / 可配置模型 · SQLite 留存")
         st.caption("学习原型，使用虚构数据；不声称符合金融监管标准。")
+    operator = st.text_input("操作者标识（必填）", key="operator", max_chars=64,
+                             placeholder="例如：demo-reviewer",
+                             help="自报标签，用于记录生成与审核；不是身份认证。")
     if "_notice" in st.session_state:
         st.success(st.session_state.pop("_notice"))
     try:
