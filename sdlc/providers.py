@@ -67,3 +67,87 @@ class UnconfiguredModelProvider:
 
     def generate(self, request: dict) -> ModelResponse:
         raise RuntimeError("实际模型尚未配置。请先确定服务商、模型、预算、超时和环境变量密钥。")
+
+
+class ProviderError(RuntimeError):
+    """Sanitized transport error safe to store in the run ledger."""
+
+
+class CompatibleProvider:
+    """Non-streaming Chat Completions adapter, configured only from environment."""
+
+    def __init__(self):
+        import os
+        from urllib.parse import urlsplit
+
+        endpoint = os.environ.get('SDLC_MODEL_URL', '').strip()
+        model = os.environ.get('SDLC_MODEL_NAME', '').strip()
+        parts = urlsplit(endpoint)
+        local = parts.hostname in {'127.0.0.1', 'localhost', '::1'}
+        if (parts.scheme not in {'https', 'http'} or not parts.hostname
+                or (parts.scheme == 'http' and not local)
+                or parts.username or parts.password or parts.query or parts.fragment):
+            raise ValueError('SDLC_MODEL_URL 须为完整 HTTPS 接口地址；仅本机允许 HTTP，不允许凭据或查询参数。')
+        if not model:
+            raise ValueError('请设置 SDLC_MODEL_NAME。')
+        key = os.environ.get('SDLC_MODEL_API_KEY', '').strip()
+        if not local and not key:
+            raise ValueError('远端模型需要环境变量 SDLC_MODEL_API_KEY。')
+        if '\r' in key or '\n' in key:
+            raise ValueError('密钥格式无效。')
+        try:
+            timeout = int(os.environ.get('SDLC_MODEL_TIMEOUT', '60'))
+            limit = int(os.environ.get('SDLC_MODEL_MAX_TOKENS', '4096'))
+        except ValueError as exc:
+            raise ValueError('超时和输出 Token 上限必须是整数。') from exc
+        if not 1 <= timeout <= 300 or not 128 <= limit <= 32768:
+            raise ValueError('超时须为 1–300 秒，输出 Token 上限须为 128–32768。')
+        self._endpoint, self._key = endpoint, key
+        self.config = {'provider': 'openai-compatible', 'model': model,
+                       'endpoint': endpoint, 'timeout_seconds': timeout,
+                       'parameters': {'max_tokens': limit}, 'real_model_call': True}
+
+    def generate(self, request: dict) -> ModelResponse:
+        import socket
+        from urllib.error import HTTPError, URLError
+        from urllib.request import Request, HTTPRedirectHandler, build_opener
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        payload = {'model': self.config['model'], 'stream': False,
+                   'max_tokens': self.config['parameters']['max_tokens'],
+                   'messages': [{'role': 'system', 'content': request['prompt']['rendered']}]}
+        headers = {'Content-Type': 'application/json'}
+        if self._key:
+            headers['Authorization'] = 'Bearer ' + self._key
+        try:
+            req = Request(self._endpoint, data=json.dumps(payload).encode(), headers=headers)
+            with build_opener(NoRedirect()).open(req, timeout=self.config['timeout_seconds']) as response:
+                body = response.read(4 * 1024 * 1024 + 1)
+            if len(body) > 4 * 1024 * 1024:
+                raise ProviderError('模型响应超过 4 MiB，已拒绝处理。')
+            envelope = json.loads(body)
+            choice = envelope['choices'][0]
+            content = choice['message']['content']
+            if not isinstance(content, str) or not content.strip():
+                raise ProviderError('模型未返回文本内容，可能拒绝回答或响应格式不兼容。')
+            usage = envelope.get('usage')
+            if isinstance(usage, dict):
+                usage = {'input_tokens': usage.get('prompt_tokens'),
+                         'output_tokens': usage.get('completion_tokens')}
+                if any(v is not None and (type(v) is not int or v < 0) for v in usage.values()):
+                    usage = None
+            else:
+                usage = None
+            return ModelResponse(content, {**self.config,
+                'model_revision': envelope.get('model'), 'finish_reason': choice.get('finish_reason')}, usage)
+        except HTTPError as exc:
+            raise ProviderError(f'模型服务返回 HTTP {exc.code}；请检查地址、权限、限额和请求参数。') from None
+        except (TimeoutError, socket.timeout):
+            raise ProviderError('模型请求超时；未自动重试。') from None
+        except URLError:
+            raise ProviderError('无法连接模型服务；请检查地址、网络和证书。') from None
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise ProviderError('模型响应不是兼容的 Chat Completions JSON。') from None

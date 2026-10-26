@@ -4,7 +4,7 @@
 
 | 实际执行 | 结果 |
 | --- | --- |
-| `python -m pytest -q` | 92 passed（包括 3 个 Streamlit AppTest 页面流程） |
+| `python -m pytest -q` | 105 passed（包括 4 个 Streamlit AppTest 页面流程） |
 | `ruff check .` | All checks passed |
 | `python -m evaluation.cli validate` | 20 个样本；dev 12、holdout 8；哈希与标准结构通过；仍为待人工审核草稿 |
 | `python -m pip check` | No broken requirements found |
@@ -19,7 +19,7 @@
 
 实际边界：
 
-- 真实模型服务、密钥、预算、超时和成本方案尚未选择/接入；AC-15 的错误与中断路径使用测试适配器验证，未做真实供应商集成验证。
+- 已实现可配置 Chat Completions 接口和页面模式，本地 HTTP 模拟服务验证了请求、Token、权限/限流错误、无效响应、超时、截断门禁和密钥隔离。实际服务商、型号与预算尚未确定，未做真实供应商集成验证。
 - M2 的 20 份候选标准由 AI 起草，尚未经人逐份审核或冻结。120 条只是调用计划，没有模型输出或提升结论。
 - GitHub Actions 工作流已编写，仓库尚无远端；线上 Issue、PR、CI 运行没有完成证据。
 - 当前为本机单用户原型；结构校验不能替代语义复核，自报操作者不提供身份认证。

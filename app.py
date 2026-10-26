@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from sdlc.domain import prepare_input
-from sdlc.providers import list_samples
+from sdlc.providers import CompatibleProvider, list_samples
 from sdlc.service import Service, ServiceError
 
 
@@ -78,7 +78,21 @@ def source_view(document: dict, key: str, preferred: list[str] | None = None) ->
 def new_run(service: Service, operator: str) -> None:
     st.title("从需求到可追溯测试")
     st.caption("输入 → 结构校验 → 逐条复核 → 批准导出")
-    st.info("固定样例模式 · 未调用模型。当前只接受与预置样例完全匹配的输入。")
+    mode = st.radio("生成方式", ["固定样例回放", "模型生成"], horizontal=True, key="generation_mode")
+    provider = None
+    configured = True
+    confirmed = True
+    if mode == "模型生成":
+        try:
+            provider = CompatibleProvider()
+            st.json(provider.config)
+        except ValueError as error:
+            configured = False
+            st.warning(str(error))
+        confirmed = st.checkbox("确认将本次 PRD 发送至上述配置地址，并承担可能的调用费用", key="model_confirm")
+        st.caption("配置环境变量后重启应用。一次生成发送一个请求，不自动重试；输出须人工审核。")
+    else:
+        st.info("固定样例模式 · 未调用模型。当前只接受与预置样例完全匹配的输入。")
     st.caption("仅使用虚构的费用报销数据。上传 .md / .markdown，最大 100 KiB；正文最多 20,000 字符。")
     if not operator.strip():
         st.caption("开始前请展开左上角侧栏，填写操作者标识。")
@@ -103,11 +117,12 @@ def new_run(service: Service, operator: str) -> None:
     parent = st.text_input("关联父运行 ID（可选）", key="parent_run_id",
                            help="补充业务事实或重新生成时关联旧运行；原记录与审批保留。")
     prompt_version = st.selectbox("Prompt 版本", ["v2", "v1"], key="prompt_version")
-    st.caption("样例结果固定，切换 Prompt 仅验证配置留存，不能用于比较模型效果。")
+    if mode == "固定样例回放":
+        st.caption("样例结果固定，切换 Prompt 仅验证配置留存，不能用于比较模型效果。")
     left, right = st.columns(2)
     preview = left.button("检查输入与段落", width="stretch")
     generate = right.button("生成测试用例", type="primary", key="generate",
-                            width="stretch", disabled=not operator.strip())
+                            width="stretch", disabled=not operator.strip() or not configured or not confirmed)
     fingerprint = hashlib.sha256(repr(kwargs).encode("utf-8")).hexdigest()
     if preview:
         try:
@@ -124,10 +139,10 @@ def new_run(service: Service, operator: str) -> None:
                      if k not in {"paragraphs", "text", "raw_text", "normalized_text", "original_text"}})
     if generate:
         try:
-            with st.spinner("保存输入、生成固定样例并校验…"):
+            with st.spinner("保存输入、生成并校验…"):
                 run_id = service.generate(**kwargs, operator=operator, prompt_version=prompt_version,
                                           parent_run_id=parent.strip() or None,
-                                          request_id=request_id())
+                                          request_id=request_id(), provider=provider)
             go_to(PAGES[1], run_id)
         except (ServiceError, ValueError) as error:
             display_error(error)
@@ -320,7 +335,7 @@ def detail(service: Service, operator: str) -> None:
         st.session_state["_draft"] = document.get("normalized_text", document.get("text", ""))
         st.session_state["_parent"] = run_id
         go_to(PAGES[0])
-    st.caption("补充业务规则后需重新生成并审核。固定样例模式目前只支持预置输入。")
+    st.caption("补充业务规则后需重新生成并审核；自定义输入请使用已配置的模型模式。")
     blockers = service.gate(run_id)
     tabs = st.tabs(["用例审核", "澄清问题", "需求与提取", "运行记录", "导出"])
     with tabs[0]:
@@ -429,7 +444,7 @@ def main() -> None:
             st.info("填写操作者标识后可生成、审核与导出。")
         st.caption("这是自报标签，不是身份认证。")
         st.divider()
-        st.caption("本地固定样例 · SQLite 留存")
+        st.caption("样例回放 / 可配置模型 · SQLite 留存")
         st.caption("学习原型，使用虚构数据；不声称符合金融监管标准。")
     if "_notice" in st.session_state:
         st.success(st.session_state.pop("_notice"))

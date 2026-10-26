@@ -15,7 +15,7 @@ from sdlc import __version__
 from sdlc.domain import Clarification, prepare_input, validate_current, validate_output
 from sdlc.exports import render_export
 from sdlc.prompts import build_prompt
-from sdlc.providers import FixtureProvider
+from sdlc.providers import FixtureProvider, ProviderError
 
 
 class ServiceError(ValueError):
@@ -45,7 +45,7 @@ def actor_reason(operator, reason=None):
 
 def safe_metadata(value):
     allowed = {"provider", "model", "model_revision", "temperature", "seed", "max_output_tokens",
-               "timeout_seconds", "fixture_id", "mode", "real_model_call"}
+               "timeout_seconds", "fixture_id", "mode", "real_model_call", "endpoint", "finish_reason"}
     result = {k: v for k, v in value.items() if k in allowed}
     if isinstance(value.get("parameters"), dict):
         result["parameters"] = {k: v for k, v in value["parameters"].items()
@@ -193,7 +193,7 @@ class Service:
             latency = (time.perf_counter() - start) * 1000
         except Exception as exc:
             # Unknown provider exceptions may contain authorization headers; never persist them.
-            message = str(exc) if isinstance(provider, FixtureProvider) else f"模型调用失败（{type(exc).__name__}）"
+            message = str(exc) if isinstance(exc, ProviderError) or type(provider) is FixtureProvider else f"模型调用失败（{type(exc).__name__}）"
             with self.connection(write=True) as db:
                 if self._run(db, run_id)["status"] != "generating":
                     return run_id
@@ -203,6 +203,9 @@ class Service:
                 self._event(db, run_id, "generation_failed", operator, message)
             return run_id
         validation = validate_output(response.raw_output, prepared["paragraphs"])
+        if response.metadata.get("finish_reason") in {"length", "content_filter", "tool_calls"}:
+            validation["valid"] = False
+            validation["errors"].append("模型响应未正常完成，不能进入审批；原始内容已保留。")
         output = validation.get("output")
         with self.connection(write=True) as db:
             if self._run(db, run_id)["status"] != "generating":
