@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-015",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 同一阈值双路径冲突"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。一级审批人和二级审批人处理已提交报销单。"
+    },
+    {
+      "id": "P003",
+      "text": "金额低于 7,000 元只经过一级审批，禁止进入二级。"
+    },
+    {
+      "id": "P004",
+      "text": "金额大于等于 6,000 元必须经过二级审批。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "statement": "6,000 至低于 7,000 元存在冲突",
+      "executable": false,
+      "required_checks": []
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "question": "6,000 ≤ 金额 < 7,000 元范围同时禁止与要求二级审批，应如何解决？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "只在 6,000 元一点冲突",
+    "默认采用高阈值",
+    "后条规则覆盖前条"
+  ]
+}

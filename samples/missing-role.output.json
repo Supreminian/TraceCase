@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "features": [
+    {
+      "id": "F-001",
+      "description": "虚构费用报销提交与审批",
+      "paragraph_ids": [
+        "P002",
+        "P003"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-001",
+      "name": "申请人",
+      "responsibilities": [
+        "提交填写了金额和发票号的报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "business_rules": [
+    {
+      "id": "R-001",
+      "statement": "申请人提交填写了金额和发票号的报销单。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "R-002",
+      "statement": "金额大于5000元需一级和二级审批才可已审批，但执行角色和权限未定义。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q-001",
+      "question": "谁有权执行一级、二级审批，角色及权限如何规定？",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "requirement_ids": [
+        "R-002"
+      ],
+      "affected_case_ids": [
+        "TC-002"
+      ],
+      "scope": "case",
+      "blocking": true,
+      "rationale": null
+    }
+  ],
+  "test_cases": [
+    {
+      "case_id": "TC-001",
+      "title": "申请人提交填写完整的报销单",
+      "requirement_ids": [
+        "R-001"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ],
+      "preconditions": [
+        "申请人准备已填写金额和发票号的虚构报销单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人提交报销单。"
+        }
+      ],
+      "expected_results": [
+        "报销单完成提交。"
+      ],
+      "priority": "P0",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-002",
+      "title": "大于5000元审批执行角色待澄清",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "preconditions": [
+        "报销单金额为 5001 元；待澄清一级及二级审批执行者和权限。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "待明确有权角色后，依次执行一级审批、二级审批。"
+        }
+      ],
+      "expected_results": [
+        "只有完成两级审批后才能标记已审批；当前缺少角色信息，不能执行该用例。"
+      ],
+      "priority": "P0",
+      "category": "boundary",
+      "readiness": "needs_clarification",
+      "clarification_ids": [
+        "Q-001"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-002",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 大额含义未定义"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人可以提交报销单，审批人处理普通报销审批。"
+    },
+    {
+      "id": "P003",
+      "text": "大额报销需要额外审批。"
+    },
+    {
+      "id": "P004",
+      "text": "审批人驳回报销单时必须填写原因；不填写时保持原状态。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "大额增加审批",
+      "executable": false,
+      "required_checks": []
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P004"
+      ],
+      "statement": "驳回必须有原因",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "审批人不填写原因驳回",
+          "expected": "原状态不变"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "question": "大额的金额阈值、边界包含关系、额外审批执行角色及顺序是什么？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "大额等于 5,000 元",
+    "额外审批人为财务负责人"
+  ]
+}

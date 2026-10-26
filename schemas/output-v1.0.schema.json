@@ -1,0 +1,375 @@
+{
+  "$defs": {
+    "BusinessRule": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "clear",
+            "ambiguous",
+            "conflicting",
+            "incomplete"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "paragraph_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paragraph Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "status",
+        "paragraph_ids"
+      ],
+      "title": "BusinessRule",
+      "type": "object"
+    },
+    "Clarification": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "paragraph_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paragraph Ids",
+          "type": "array"
+        },
+        "requirement_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Requirement Ids",
+          "type": "array"
+        },
+        "affected_case_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Affected Case Ids",
+          "type": "array"
+        },
+        "scope": {
+          "enum": [
+            "case",
+            "run"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "blocking": {
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        }
+      },
+      "required": [
+        "id",
+        "question",
+        "paragraph_ids",
+        "requirement_ids",
+        "affected_case_ids",
+        "scope",
+        "blocking"
+      ],
+      "title": "Clarification",
+      "type": "object"
+    },
+    "Feature": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "paragraph_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paragraph Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "paragraph_ids"
+      ],
+      "title": "Feature",
+      "type": "object"
+    },
+    "Role": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "responsibilities": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Responsibilities",
+          "type": "array"
+        },
+        "paragraph_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paragraph Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "responsibilities",
+        "paragraph_ids"
+      ],
+      "title": "Role",
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "action"
+      ],
+      "title": "Step",
+      "type": "object"
+    },
+    "TestCase": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "requirement_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Requirement Ids",
+          "type": "array"
+        },
+        "paragraph_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paragraph Ids",
+          "type": "array"
+        },
+        "preconditions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        },
+        "expected_results": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Expected Results",
+          "type": "array"
+        },
+        "priority": {
+          "enum": [
+            "P0",
+            "P1",
+            "P2"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "normal",
+            "boundary",
+            "exception"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "readiness": {
+          "enum": [
+            "ready",
+            "needs_clarification"
+          ],
+          "title": "Readiness",
+          "type": "string"
+        },
+        "clarification_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Clarification Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "title",
+        "requirement_ids",
+        "paragraph_ids",
+        "preconditions",
+        "steps",
+        "expected_results",
+        "priority",
+        "category",
+        "readiness",
+        "clarification_ids"
+      ],
+      "title": "TestCase",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/Feature"
+      },
+      "title": "Features",
+      "type": "array"
+    },
+    "roles": {
+      "items": {
+        "$ref": "#/$defs/Role"
+      },
+      "title": "Roles",
+      "type": "array"
+    },
+    "business_rules": {
+      "items": {
+        "$ref": "#/$defs/BusinessRule"
+      },
+      "title": "Business Rules",
+      "type": "array"
+    },
+    "clarifications": {
+      "items": {
+        "$ref": "#/$defs/Clarification"
+      },
+      "title": "Clarifications",
+      "type": "array"
+    },
+    "test_cases": {
+      "items": {
+        "$ref": "#/$defs/TestCase"
+      },
+      "title": "Test Cases",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "features",
+    "roles",
+    "business_rules",
+    "clarifications",
+    "test_cases"
+  ],
+  "title": "OutputModel",
+  "type": "object"
+}

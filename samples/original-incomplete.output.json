@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "features": [
+    {
+      "id": "F-001",
+      "description": "虚构费用报销提交与审批",
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P004",
+        "P005",
+        "P006"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-001",
+      "name": "申请人",
+      "responsibilities": [
+        "提交报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "business_rules": [
+    {
+      "id": "R-001",
+      "statement": "申请人提交报销单，但必填内容和提交结果未完整规定。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "R-002",
+      "statement": "大于5000元需要二级审批，但审批执行角色和完整流程未说明。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P003"
+      ]
+    },
+    {
+      "id": "R-003",
+      "statement": "已审批单不可直接修改金额，但谁可发起修改未明确。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P004"
+      ]
+    },
+    {
+      "id": "R-004",
+      "statement": "驳回需原因，但驳回执行角色及流程状态未说明。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P005"
+      ]
+    },
+    {
+      "id": "R-005",
+      "statement": "发票号不得重复提交，但去重范围、历史状态及失败记录是否参与未说明。",
+      "status": "incomplete",
+      "paragraph_ids": [
+        "P006"
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q-001",
+      "question": "请明确提交必填字段、提交成功的可观察结果；一级/二级审批与驳回角色权限和流程；谁可发起修改；发票去重的用户范围、参与状态及失败记录范围。",
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P004",
+        "P005",
+        "P006"
+      ],
+      "requirement_ids": [
+        "R-001",
+        "R-002",
+        "R-003",
+        "R-004",
+        "R-005"
+      ],
+      "affected_case_ids": [
+        "TC-001"
+      ],
+      "scope": "run",
+      "blocking": true,
+      "rationale": null
+    }
+  ],
+  "test_cases": [
+    {
+      "case_id": "TC-001",
+      "title": "金额5001元触发二级审批的执行条件待澄清",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P003"
+      ],
+      "preconditions": [
+        "待澄清：报销单的提交要求、状态以及二级审批执行角色。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "在角色和流程明确后，提交金额5001元的报销单并检查二级审批要求。"
+        }
+      ],
+      "expected_results": [
+        "5001元满足大于5000元的条件，但可执行角色和预期流程状态仍待澄清。"
+      ],
+      "priority": "P0",
+      "category": "boundary",
+      "readiness": "needs_clarification",
+      "clarification_ids": [
+        "Q-001"
+      ]
+    }
+  ]
+}

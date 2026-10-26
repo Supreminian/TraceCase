@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-019",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 驳回原因规范冲突"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。审批人处理待审批单据。"
+    },
+    {
+      "id": "P003",
+      "text": "驳回原因必须为非空文本，没有原因时不允许驳回。"
+    },
+    {
+      "id": "P004",
+      "text": "因重复发票驳回时禁止填写原因，系统允许空原因完成驳回。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "statement": "重复发票场景原因要求冲突",
+      "executable": false,
+      "required_checks": []
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "question": "重复发票是否为原因必填规则的例外？两段约束应怎样统一？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "特殊规则自动优先",
+    "自动填入重复发票作为原因"
+  ]
+}

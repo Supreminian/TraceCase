@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-009",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 已审批状态保护"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人可以修改自己的草稿报销金额并保存。"
+    },
+    {
+      "id": "P003",
+      "text": "自己的单据一旦变为已审批，申请人直接改金额的请求必须被拒绝，金额和审批状态保持不变。本范围不提供撤回、冲正、重新提交。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P002"
+      ],
+      "statement": "草稿可修改金额",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "申请人修改自己草稿的金额并保存",
+          "expected": "新金额保存成功"
+        }
+      ]
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "已审批不能改金额",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "申请人直接修改自己已审批单的金额",
+          "expected": "拒绝，原金额及审批状态不变"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "系统自动创建冲正单",
+    "申请人可撤回已审批单"
+  ]
+}

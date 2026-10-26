@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-004",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 相等点明确冲突"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交报销，一级审批人及二级审批人分别执行各级审批。"
+    },
+    {
+      "id": "P003",
+      "text": "金额不超过 5,000 元无需二级审批。"
+    },
+    {
+      "id": "P004",
+      "text": "金额大于等于 5,000 元必须进行二级审批。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "statement": "5,000 元处的二级审批规则冲突",
+      "executable": false,
+      "required_checks": []
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "question": "金额恰为 5,000 元时两段规则冲突，应采用什么规则？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "后文优先",
+    "较严格规则优先",
+    "5,000 元一定无需二级审批"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "features": [
+    {
+      "id": "F-001",
+      "description": "虚构费用报销提交与审批",
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-001",
+      "name": "申请人",
+      "responsibilities": [
+        "提交报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "business_rules": [
+    {
+      "id": "R-001",
+      "statement": "申请人提交金额和发票号齐全的报销单，提交后为待审批。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "clarifications": [],
+  "test_cases": [
+    {
+      "case_id": "TC-001",
+      "title": "提交报销单",
+      "requirement_ids": [
+        "R-001"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ],
+      "preconditions": [
+        "已填写金额和发票号。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人提交报销单。"
+        }
+      ],
+      "expected_results": [
+        "状态为待审批。"
+      ],
+      "priority": "urgent",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": [],
+      "approved": true
+    }
+  ]
+}

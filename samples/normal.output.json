@@ -1,0 +1,427 @@
+{
+  "schema_version": "1.0",
+  "features": [
+    {
+      "id": "F-001",
+      "description": "虚构费用报销提交与审批",
+      "paragraph_ids": [
+        "P003",
+        "P004",
+        "P005",
+        "P006",
+        "P007"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-001",
+      "name": "申请人",
+      "responsibilities": [
+        "提交自己的报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "ROLE-002",
+      "name": "一级审批人",
+      "responsibilities": [
+        "处理待一级审批报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "ROLE-003",
+      "name": "二级审批人",
+      "responsibilities": [
+        "处理待二级审批报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "business_rules": [
+    {
+      "id": "R-001",
+      "statement": "申请人提交自己的报销单，填写金额及发票号后提交成功，状态为待一级审批。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002",
+        "P003"
+      ]
+    },
+    {
+      "id": "R-002",
+      "statement": "所有报销单经一级审批；不超过5000元一级通过即已审批；大于5000元一级通过后待二级，二级通过才已审批。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002",
+        "P004"
+      ]
+    },
+    {
+      "id": "R-003",
+      "statement": "已审批单不允许申请人直接修改金额，原金额保持不变。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002",
+        "P005"
+      ]
+    },
+    {
+      "id": "R-004",
+      "statement": "相应审批人驳回待处理单必须提供非空且不全为空白的原因；缺少则状态不变，提供则已驳回并保存原因。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002",
+        "P006"
+      ]
+    },
+    {
+      "id": "R-005",
+      "statement": "所有申请人间，完全相同发票号不得重复成功提交；四种成功提交状态参与去重，失败提交不参与。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P007"
+      ]
+    }
+  ],
+  "clarifications": [],
+  "test_cases": [
+    {
+      "case_id": "TC-001",
+      "title": "申请人成功提交报销单",
+      "requirement_ids": [
+        "R-001"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P003"
+      ],
+      "preconditions": [
+        "虚构申请人 A 的报销单包含金额 100 元及未使用的发票号 INV-DEMO-001。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人 A 提交自己的报销单。"
+        }
+      ],
+      "expected_results": [
+        "提交成功，报销单状态为待一级审批。"
+      ],
+      "priority": "P0",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-002",
+      "title": "4999元在一级通过后完成审批",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P004"
+      ],
+      "preconditions": [
+        "存在金额 4999 元、状态为待一级审批的虚构报销单。",
+        "操作者具备一级审批人角色。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人通过该报销单。"
+        }
+      ],
+      "expected_results": [
+        "状态为已审批，无需二级审批。"
+      ],
+      "priority": "P1",
+      "category": "boundary",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-003",
+      "title": "5000元恰等于阈值时无需二级审批",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P004"
+      ],
+      "preconditions": [
+        "存在金额 5000 元、状态为待一级审批的虚构报销单。",
+        "操作者具备一级审批人角色。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人通过该报销单。"
+        }
+      ],
+      "expected_results": [
+        "状态为已审批，无需二级审批。"
+      ],
+      "priority": "P0",
+      "category": "boundary",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-004",
+      "title": "5001元需完成一级与二级审批",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P004"
+      ],
+      "preconditions": [
+        "存在金额 5001 元、状态为待一级审批的虚构报销单。",
+        "已分别准备一级审批人和二级审批人角色。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人通过该报销单，记录中间状态。"
+        },
+        {
+          "number": 2,
+          "action": "二级审批人通过该报销单，记录最终状态。"
+        }
+      ],
+      "expected_results": [
+        "一级通过后的中间状态为待二级审批。",
+        "二级通过后的最终状态为已审批。"
+      ],
+      "priority": "P0",
+      "category": "boundary",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-005",
+      "title": "已审批报销单不可直接修改金额",
+      "requirement_ids": [
+        "R-003"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P005"
+      ],
+      "preconditions": [
+        "申请人 A 拥有金额 100 元、状态为已审批的虚构报销单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人 A 尝试将该报销单金额直接修改为 101 元。"
+        },
+        {
+          "number": 2,
+          "action": "读取报销单金额。"
+        }
+      ],
+      "expected_results": [
+        "修改不生效，原金额仍为 100 元。"
+      ],
+      "priority": "P0",
+      "category": "exception",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-006",
+      "title": "驳回未提供原因不生效",
+      "requirement_ids": [
+        "R-004"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P006"
+      ],
+      "preconditions": [
+        "分别准备待一级审批和待二级审批的报销单，以及对应审批人。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人对待一级审批单不提供原因发起驳回。"
+        },
+        {
+          "number": 2,
+          "action": "二级审批人对待二级审批单不提供原因发起驳回。"
+        }
+      ],
+      "expected_results": [
+        "两次驳回均不生效，各报销单保持原待审批状态。"
+      ],
+      "priority": "P0",
+      "category": "exception",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-007",
+      "title": "驳回原因为空字符串或全空白不生效",
+      "requirement_ids": [
+        "R-004"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P006"
+      ],
+      "preconditions": [
+        "分别准备待一级审批与待二级审批的报销单及对应审批人，确保每次尝试前保持原状态。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "各对应审批人先以空字符串为原因尝试驳回。"
+        },
+        {
+          "number": 2,
+          "action": "各对应审批人再以三个空格为原因尝试驳回。"
+        }
+      ],
+      "expected_results": [
+        "四次驳回均不生效，报销单状态保持不变。"
+      ],
+      "priority": "P1",
+      "category": "boundary",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-008",
+      "title": "有效驳回保存原因并改变状态",
+      "requirement_ids": [
+        "R-004"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P006"
+      ],
+      "preconditions": [
+        "分别准备待一级审批与待二级审批的报销单及对应审批人。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人以虚构原因“演示材料不齐”驳回待一级审批单。"
+        },
+        {
+          "number": 2,
+          "action": "二级审批人以相同原因驳回待二级审批单。"
+        }
+      ],
+      "expected_results": [
+        "两份报销单均为已驳回，各自保存原因“演示材料不齐”。"
+      ],
+      "priority": "P0",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-009",
+      "title": "相同申请人的重复发票号被拒绝",
+      "requirement_ids": [
+        "R-001",
+        "R-005"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P007"
+      ],
+      "preconditions": [
+        "申请人 A 有发票号 INV-DEMO-009、状态为待一级审批的成功提交记录。",
+        "申请人 A 准备金额 100 元且发票号完全相同的新报销单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人 A 提交新报销单。"
+        }
+      ],
+      "expected_results": [
+        "重复提交不成功，不新增报销单。"
+      ],
+      "priority": "P0",
+      "category": "exception",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-010",
+      "title": "跨申请人及所有参与状态的重复发票号被拒绝",
+      "requirement_ids": [
+        "R-001",
+        "R-005"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P007"
+      ],
+      "preconditions": [
+        "申请人 A 分别有四份成功提交单，状态为待一级审批、待二级审批、已审批、已驳回，发票号依次为 INV-DEMO-010-A/B/C/D。",
+        "申请人 B 准备金额 100 元且分别使用上述完全相同发票号的四份新单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人 B 依次提交上述四份新单。"
+        }
+      ],
+      "expected_results": [
+        "四次重复提交均不成功，不新增报销单。"
+      ],
+      "priority": "P0",
+      "category": "exception",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-011",
+      "title": "仅失败提交历史不参与发票去重",
+      "requirement_ids": [
+        "R-001",
+        "R-005"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P007"
+      ],
+      "preconditions": [
+        "测试数据中 INV-DEMO-011 只有失败提交历史，没有成功提交的报销单。",
+        "申请人 A 准备金额 100 元、发票号 INV-DEMO-011 的报销单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人 A 提交该报销单。"
+        }
+      ],
+      "expected_results": [
+        "该发票号不因失败提交历史被判重复，提交成功，状态为待一级审批。"
+      ],
+      "priority": "P1",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": []
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[
+  {"id":"normal","label":"完整样例 · 可逐条审核并导出","input":"normal.md","output":"normal.output.json"},
+  {"id":"ambiguous","label":"含糊阈值 · 待澄清","input":"ambiguous.md","output":"ambiguous.output.json"},
+  {"id":"missing-role","label":"遗漏审批角色 · 待澄清","input":"missing-role.md","output":"missing-role.output.json"},
+  {"id":"conflicting","label":"5,000 元阈值冲突 · 待澄清","input":"conflicting.md","output":"conflicting.output.json"},
+  {"id":"invalid-json","label":"故意非法 JSON · 校验失败","input":"invalid-json.md","output":"invalid-json.output.txt"},
+  {"id":"invalid-schema","label":"故意 Schema 错误 · 校验失败","input":"invalid-schema.md","output":"invalid-schema.output.json"},
+  {"id":"original-incomplete","label":"原始五条规则 · 信息不完整","input":"original-incomplete.md","output":"original-incomplete.output.json"}
+]

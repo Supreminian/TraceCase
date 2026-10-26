@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-005",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 单向阈值表述差异"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。一级审批人处理报销，二级审批人负责额外审批。"
+    },
+    {
+      "id": "P003",
+      "text": "金额大于 5,000 元需要二级审批。"
+    },
+    {
+      "id": "P004",
+      "text": "金额大于等于 5,000 元需要二级审批。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "statement": "两条单向条件均要求超阈值进入二级审批",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "金额 5,001 元的审批",
+          "expected": "需要二级审批"
+        },
+        {
+          "id": "C02",
+          "condition": "金额 5,000 元的审批",
+          "expected": "按 P004 需要二级审批"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "question": "两处表述是否有意不同？低于 5,000 元的审批路径和两级处理顺序是什么？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "两条单向触发规则必然逻辑冲突",
+    "5,000 元以下免审"
+  ]
+}

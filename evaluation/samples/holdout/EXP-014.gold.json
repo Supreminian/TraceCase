@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-014",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 缺失操作主体"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。报销单支持提交、批准和驳回。"
+    },
+    {
+      "id": "P003",
+      "text": "驳回必须附原因，原因缺失时操作无效，单据状态不变。"
+    },
+    {
+      "id": "P004",
+      "text": "已批准单据金额不可直接修改。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "驳回有原因要求",
+      "executable": false,
+      "required_checks": []
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P004"
+      ],
+      "statement": "已批准金额锁定",
+      "executable": false,
+      "required_checks": []
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P004"
+      ],
+      "question": "谁可以提交、批准、驳回和修改单据？是否有单据归属范围限制？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "默认管理员执行全部动作",
+    "补出申请人、主管及财务角色"
+  ]
+}

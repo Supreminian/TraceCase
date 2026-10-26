@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0",
+  "features": [
+    {
+      "id": "F-001",
+      "description": "虚构费用报销提交与审批",
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P004"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "ROLE-001",
+      "name": "申请人",
+      "responsibilities": [
+        "提交报销单"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "ROLE-002",
+      "name": "一级审批人",
+      "responsibilities": [
+        "处理一级审批"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "ROLE-003",
+      "name": "二级审批人",
+      "responsibilities": [
+        "处理二级审批"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ]
+    }
+  ],
+  "business_rules": [
+    {
+      "id": "R-001",
+      "statement": "申请人提交填写了金额和发票号的报销单。",
+      "status": "clear",
+      "paragraph_ids": [
+        "P002"
+      ]
+    },
+    {
+      "id": "R-002",
+      "statement": "不超过5000元无需二级审批，但大于等于5000元必须二级审批；恰等于5000元行为冲突。",
+      "status": "conflicting",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q-001",
+      "question": "金额恰为 5000 元时，是一级通过即可已审批，还是必须进行二级审批？请修订冲突条款。",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "requirement_ids": [
+        "R-002"
+      ],
+      "affected_case_ids": [
+        "TC-002"
+      ],
+      "scope": "case",
+      "blocking": true,
+      "rationale": null
+    }
+  ],
+  "test_cases": [
+    {
+      "case_id": "TC-001",
+      "title": "申请人提交填写完整的报销单",
+      "requirement_ids": [
+        "R-001"
+      ],
+      "paragraph_ids": [
+        "P002"
+      ],
+      "preconditions": [
+        "申请人准备填写了金额及发票号的虚构报销单。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "申请人提交报销单。"
+        }
+      ],
+      "expected_results": [
+        "报销单完成提交。"
+      ],
+      "priority": "P0",
+      "category": "normal",
+      "readiness": "ready",
+      "clarification_ids": []
+    },
+    {
+      "case_id": "TC-002",
+      "title": "5000元审批预期冲突",
+      "requirement_ids": [
+        "R-002"
+      ],
+      "paragraph_ids": [
+        "P002",
+        "P003",
+        "P004"
+      ],
+      "preconditions": [
+        "金额为 5000 元的报销单已提交；一级审批人准备处理。"
+      ],
+      "steps": [
+        {
+          "number": 1,
+          "action": "一级审批人通过该报销单。"
+        }
+      ],
+      "expected_results": [
+        "待澄清：P003 要求直接已审批，P004 要求待二级审批；不能选择任一作为确定预期。"
+      ],
+      "priority": "P0",
+      "category": "boundary",
+      "readiness": "needs_clarification",
+      "clarification_ids": [
+        "Q-001"
+      ]
+    }
+  ]
+}

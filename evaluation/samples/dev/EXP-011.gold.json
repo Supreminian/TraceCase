@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-011",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 只允许处理本人单据"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人创建报销草稿，单据保存所属申请人的标识。"
+    },
+    {
+      "id": "P003",
+      "text": "申请人仅能提交属于自己的草稿；提交他人的草稿必须拒绝，并保持该草稿原内容和状态。提交自己的草稿后状态为待审批。"
+    },
+    {
+      "id": "P004",
+      "text": "申请人不具有任何审批权限；尝试审批任何单据均被拒绝且原状态保持不变。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "提交所有权",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "申请人提交自己的草稿",
+          "expected": "状态待审批"
+        },
+        {
+          "id": "C02",
+          "condition": "申请人提交他人的草稿",
+          "expected": "拒绝且原内容、状态不变"
+        }
+      ]
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P004"
+      ],
+      "statement": "申请人没有审批权限",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "申请人审批自己的待审批单",
+          "expected": "拒绝且状态不变"
+        },
+        {
+          "id": "C02",
+          "condition": "申请人审批他人的待审批单",
+          "expected": "拒绝且状态不变"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "申请人拥有管理员权限",
+    "主管可越权代提交"
+  ]
+}

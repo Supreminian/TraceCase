@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-003",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 遗漏审批角色"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人可创建并提交自己的报销单。"
+    },
+    {
+      "id": "P003",
+      "text": "报销金额大于 5,000 元需要二级审批；不超过 5,000 元只需一级审批。"
+    },
+    {
+      "id": "P004",
+      "text": "已审批单不能直接修改金额；修改请求被拒绝，原金额保持不变。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "按金额分审批级别",
+      "executable": false,
+      "required_checks": []
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P004"
+      ],
+      "statement": "已审批单金额锁定",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "已审批单请求修改金额",
+          "expected": "拒绝且保留原金额"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "question": "一级、二级审批由什么业务角色执行，各自有哪些权限？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "审批人为部门经理",
+    "审批人为财务主管"
+  ]
+}

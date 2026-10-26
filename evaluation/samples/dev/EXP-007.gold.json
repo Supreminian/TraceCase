@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-007",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 明确发票去重范围"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交自己的报销单，每单仅含一个发票号。"
+    },
+    {
+      "id": "P003",
+      "text": "发票号按原始字符串精确匹配，区分大小写和空白。只在同一申请人名下且状态为待审批或已审批的单据中去重；重复时拒绝新提交。其他申请人的记录和已驳回记录不参与。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "发票去重范围与状态",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "同一申请人已有待审批发票 INV-A，再提交 INV-A",
+          "expected": "拒绝新提交"
+        },
+        {
+          "id": "C02",
+          "condition": "同一申请人已有已审批发票 INV-A，再提交 INV-A",
+          "expected": "拒绝新提交"
+        },
+        {
+          "id": "C03",
+          "condition": "只有其他申请人的 INV-A，当前申请人提交 INV-A",
+          "expected": "去重校验通过"
+        },
+        {
+          "id": "C04",
+          "condition": "同一申请人仅有已驳回 INV-A，再提交 INV-A",
+          "expected": "去重校验通过"
+        }
+      ]
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "发票字符串精确匹配",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "已有 INV-A，提交 inv-a",
+          "expected": "去重校验通过"
+        },
+        {
+          "id": "C02",
+          "condition": "已有 INV-A，提交带前置空格的 INV-A",
+          "expected": "去重校验通过"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "跨申请人去重",
+    "自动去除空白"
+  ]
+}

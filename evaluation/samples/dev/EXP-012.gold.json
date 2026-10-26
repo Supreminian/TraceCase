@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-012",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 审批顺序缺失"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交报销单，一级审批人和二级审批人分别可以执行相应审批。"
+    },
+    {
+      "id": "P003",
+      "text": "金额大于 8,000 元的报销单需要一级和二级审批；金额不超过 8,000 元只需要一级审批。"
+    },
+    {
+      "id": "P004",
+      "text": "二级审批与一级审批的先后关系暂未定义。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "statement": "超 8,000 元的双级审批流程",
+      "executable": false,
+      "required_checks": []
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "不超过 8,000 元只一级",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "金额恰为 8,000 元",
+          "expected": "只要求一级审批"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003",
+        "P004"
+      ],
+      "question": "超 8,000 元的一级、二级审批是顺序还是并行？拒绝或通过后的状态如何变化？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "一级必然先于二级",
+    "二级可以并行审批"
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-017",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 含糊及时处理"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交报销，审批人负责处理待审批单据。"
+    },
+    {
+      "id": "P003",
+      "text": "审批人应及时审批；超时后系统自动升级处理。"
+    },
+    {
+      "id": "P004",
+      "text": "申请人可查看自己的单据状态，不可查看其他申请人的单据，越权查询必须拒绝。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "及时审批和自动升级",
+      "executable": false,
+      "required_checks": []
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P004"
+      ],
+      "statement": "查询归属限制",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "申请人查看自己的单据",
+          "expected": "显示该单状态"
+        },
+        {
+          "id": "C02",
+          "condition": "申请人查看他人的单据",
+          "expected": "拒绝访问"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "question": "及时的时限是多少，以自然时间还是工作时间计算，起止点与暂停条件是什么？升级到谁并产生什么状态？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "24 小时后升级",
+    "自动交财务总监",
+    "只统计工作日"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-010",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 驳回原因边界"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。审批人能驳回处于待审批状态的报销单。"
+    },
+    {
+      "id": "P003",
+      "text": "驳回原因去除首尾空白后必须至少有一个字符，最多 200 个 Unicode 字符；不符合时保持待审批状态，符合时记录去除首尾空白后的原因并转为已驳回。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "驳回原因长度与空白",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "原因仅为空格",
+          "expected": "拒绝，状态待审批"
+        },
+        {
+          "id": "C02",
+          "condition": "原因去除首尾空白后恰 1 字符",
+          "expected": "已驳回且记录整理后的原因"
+        },
+        {
+          "id": "C03",
+          "condition": "原因恰 200 字符",
+          "expected": "已驳回"
+        },
+        {
+          "id": "C04",
+          "condition": "原因恰 201 字符",
+          "expected": "拒绝，状态待审批"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "按 UTF-8 字节计算长度",
+    "固定原因枚举"
+  ]
+}

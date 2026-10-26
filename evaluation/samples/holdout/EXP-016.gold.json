@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-016",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 驳回后发票允许重用"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交报销单，每单包含一个发票号，按原始字符串精确匹配。"
+    },
+    {
+      "id": "P003",
+      "text": "全系统范围内，已提交且待审批或已审批的单据占用发票号；已驳回单据立即释放发票号。新提交使用被占用号码时拒绝，否则发票校验通过。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "发票号占用与释放",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "其他申请人待审批单占用 INV-Z，当前申请人提交 INV-Z",
+          "expected": "拒绝"
+        },
+        {
+          "id": "C02",
+          "condition": "已有已审批 INV-Z，再提交 INV-Z",
+          "expected": "拒绝"
+        },
+        {
+          "id": "C03",
+          "condition": "仅有已驳回 INV-Z，再提交 INV-Z",
+          "expected": "发票校验通过"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "已驳回号码永久禁用",
+    "只在当前申请人去重"
+  ]
+}

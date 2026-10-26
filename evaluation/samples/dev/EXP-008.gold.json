@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-008",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 金额精度遗漏"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交报销，一级审批人首先处理；需要时二级审批人接续处理。"
+    },
+    {
+      "id": "P003",
+      "text": "金额大于 5,000 元时一级通过后进入二级审批。金额不超过 5,000 元时一级通过即完成审批。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "阈值路由",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "5,000 元一级通过",
+          "expected": "完成审批"
+        },
+        {
+          "id": "C02",
+          "condition": "5,001 元一级通过",
+          "expected": "进入二级审批"
+        }
+      ]
+    }
+  ],
+  "clarifications": [
+    {
+      "id": "Q01",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "question": "允许的金额最小值、币种和小数精度是什么？零、负数和多位小数如何处理？",
+      "blocking": true
+    }
+  ],
+  "prohibited_inferences": [
+    "默认允许两位小数",
+    "0.01 元一定是最小边界",
+    "默认零金额被拒绝"
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "EXP-018",
+  "paragraphs": [
+    {
+      "id": "P001",
+      "text": "# 分币边界明确"
+    },
+    {
+      "id": "P002",
+      "text": "这是虚构系统。申请人提交人民币报销，金额必须大于 0，最多两位小数；不符合时拒绝提交。一级审批人先处理，二级审批人接续需要二级的单据。"
+    },
+    {
+      "id": "P003",
+      "text": "金额不超过 5,000.00 元一级通过即完成；大于 5,000.00 元一级通过后进入二级，二级通过才完成。"
+    }
+  ],
+  "key_rules": [
+    {
+      "id": "R01",
+      "paragraph_ids": [
+        "P002"
+      ],
+      "statement": "人民币正数两位精度",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "提交 0 元",
+          "expected": "拒绝"
+        },
+        {
+          "id": "C02",
+          "condition": "提交 0.01 元",
+          "expected": "金额校验通过"
+        },
+        {
+          "id": "C03",
+          "condition": "提交 -0.01 元",
+          "expected": "拒绝"
+        },
+        {
+          "id": "C04",
+          "condition": "提交 1.001 元",
+          "expected": "拒绝"
+        }
+      ]
+    },
+    {
+      "id": "R02",
+      "paragraph_ids": [
+        "P003"
+      ],
+      "statement": "分币阈值",
+      "executable": true,
+      "required_checks": [
+        {
+          "id": "C01",
+          "condition": "5,000.00 元一级通过",
+          "expected": "完成审批"
+        },
+        {
+          "id": "C02",
+          "condition": "5,000.01 元一级通过",
+          "expected": "进入二级审批"
+        }
+      ]
+    }
+  ],
+  "clarifications": [],
+  "prohibited_inferences": [
+    "5,000.001 四舍五入后接受",
+    "免除一级审批"
+  ]
+}
