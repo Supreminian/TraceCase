@@ -121,6 +121,8 @@ class CompatibleProvider:
                    'messages': [{'role': 'system', 'content': request['prompt']['rendered']}]}
         if self.config['provider'] == 'google-gemini':
             payload['response_format'] = {'type': 'json_object'}
+            # Gemini maps user/model messages to required contents; system alone is insufficient.
+            payload['messages'].append({'role': 'user', 'content': '请分析上方 PRD，按约定返回测试用例 JSON 对象。'})
         headers = {'Content-Type': 'application/json'}
         if self._key:
             headers['Authorization'] = 'Bearer ' + self._key

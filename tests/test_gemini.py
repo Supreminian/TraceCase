@@ -42,6 +42,7 @@ def test_google_json_request_and_usage_mapping(monkeypatch):
     assert len(calls) == 1
     payload = json.loads(calls[0].data)
     assert payload['response_format'] == {'type': 'json_object'}
+    assert any(m['role'] == 'user' and m['content'].strip() for m in payload['messages'])
     assert calls[0].get_header('Authorization') == 'Bearer test-private-key'
     assert 'test-private-key' not in calls[0].full_url
     assert result.usage == {'input_tokens': 20, 'output_tokens': 30}

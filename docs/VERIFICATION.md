@@ -29,3 +29,9 @@
 已配置与桌宠一致的 gemini-3.5-flash-lite，启动器从既有 macOS 钥匙串读取凭据到进程环境，不写密钥文件。新增三项测试覆盖默认型号、密钥隔离、配置拒绝与 Google JSON 请求/Token 映射。
 
 2026-10-26 使用真实凭据查询模型元数据成功，返回 models/gemini-3.5-flash-lite，支持 generateContent。本次只做元数据查询，没有实际文本生成请求；真实用例质量、项目免费额度与计费状态尚未验证。
+
+## Gemini 真实调用故障修复
+
+用户首次生成返回 HTTP 400。复现得到 Google 错误 `GenerateContentRequest.contents: contents is not specified`；原因是兼容接口请求只有 system 消息。已补充 user 消息，并在 Google 请求测试中断言用户内容非空。
+
+对同一虚构样例进行关联新运行验证：V1 返回 JSON 但有澄清状态不一致；V2 返回 9 条原始草稿，但将“未提供撤回、冲正或重提流程”列为 BR007 且无关联用例，仍被一致性校验判 invalid。原始响应、Token 与校验错误均已保存；没有自动修改规则、批准用例或绕过校验。此结果仅是连接诊断，不是正式对照评测。
