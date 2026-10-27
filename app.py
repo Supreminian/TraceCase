@@ -45,7 +45,7 @@ def request_id() -> str:
 def go_to(page: str, run_id: str | None = None) -> None:
     st.session_state["_navigate_to"] = page
     if run_id:
-        st.session_state["selected_run"] = run_id
+        st.session_state["_selected_run"] = run_id
     st.rerun()
 
 
@@ -219,10 +219,11 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
             if next_id:
                 st.session_state["_review_next"] = {"run_id": run["id"], "case_id": next_id}
                 success("审核事件已保存，已切换到下一个待审核用例。")
-            success("审核事件已保存，本轮用例已全部处理；退回项仍需修订后复审。")
+            success("本轮用例已全部处理，请按审核结果继续导出或修订。")
         except (ServiceError, ValueError) as error:
             display_error(error)
-    with st.expander("修改当前用例 · 保存后重新审核"):
+    expand_edit = st.session_state.get("_expand_edit") == {"run_id": run["id"], "case_id": case_id}
+    with st.expander("修改当前用例 · 保存后重新审核", expanded=expand_edit):
         st.caption("每次修改创建新版本。readiness 与阻断问题关联由服务层计算，不能直接改写。")
         output = run.get("output") or {}
         rule_ids = [rule["id"] for rule in output.get("business_rules", [])]
@@ -250,7 +251,8 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
             try:
                 service.edit(run["id"], case_id, case["version"], case["revision"], updated,
                              operator, edit_reason, request_id())
-                success("新版本已保存，状态为待审核；旧版本和审批记录已保留。")
+                st.session_state.pop("_expand_edit", None)
+                success("新版本已保存，状态为待审核；请复核当前新版本后提交审核。")
             except (ServiceError, ValueError) as error:
                 display_error(error)
     with st.expander("此用例的全部版本"):
@@ -335,6 +337,72 @@ def exports_view(service: Service, run: dict, operator: str, blockers: list[str]
         st.caption("历史快照：之后的修订不会改变这份文件，当前版本仍须独立满足导出条件。")
 
 
+def review_result(service: Service, run: dict, operator: str, blockers: list[str]) -> None:
+    cases = run["cases"]
+    if run["status"] != "valid" or not cases:
+        st.warning("生成结果尚未通过校验，请先查看运行记录中的错误，再创建关联运行修正。")
+        return
+    pending = [c for c in cases if c["status"] == "pending_review"]
+    returned = [c for c in cases if c["status"] == "returned"]
+    if pending:
+        st.info(f"还有 {len(pending)} 条待审核用例，请先完成本轮审核。")
+        return
+    if not blockers:
+        st.success("本轮全部用例通过，已满足导出条件。下一步：在导出页选择 CSV 或 Markdown 并下载。")
+        return
+    if not returned:
+        st.warning("全部用例已通过，但仍有阻断问题，当前不能导出。下一步：处理澄清后复审受影响用例。")
+        st.code("\n".join(blockers), language=None)
+        if st.button("前往处理澄清", key="review_clarifications"):
+            st.session_state["_detail_target"] = {"run_id": run["id"], "tab": "澄清问题"}
+            st.rerun()
+        return
+    st.warning(f"本轮审核完成，{len(returned)} 条已退回。请选择人工修订或模型修订；当前不能导出。")
+    for case in returned:
+        event = next(e for e in reversed(run["events"]) if e["action"] == "return"
+                     and e["case_id"] == case["case_id"] and e["version"] == case["version"])
+        st.text(f"{case['case_id']} · v{case['version']} · {case['content']['title']}")
+        st.code(event["reason"], language=None, wrap_lines=True)
+    choice = st.radio("本轮退回是否涉及需求变更？", ["原需求已足够，仅修订用例", "需要补充或更改业务规则"],
+                      key=f"review_scope_{run['id']}")
+    if choice == "需要补充或更改业务规则":
+        st.info("先把角色、阈值或流程等新增事实写入 PRD，再创建关联运行。退回理由不能代替业务需求。")
+        if st.button("补充 PRD 并重新生成", key="revise_prd"):
+            st.session_state["_draft"] = run["input"]["normalized_text"]
+            st.session_state["_parent"] = run["id"]
+            go_to(PAGES[0])
+        return
+    st.subheader("方式一：人工修订")
+    selected = st.selectbox("选择要人工修订的退回用例", [c["case_id"] for c in returned],
+                            key=f"manual_returned_{run['id']}")
+    st.caption("保存为新版本并重新审核；本运行中未改动用例的批准记录仍有效。")
+    if st.button("人工修订此用例", key="manual_revision", disabled=not operator.strip()):
+        st.session_state["_review_next"] = {"run_id": run["id"], "case_id": selected}
+        st.session_state["_expand_edit"] = {"run_id": run["id"], "case_id": selected}
+        st.session_state["_detail_target"] = {"run_id": run["id"], "tab": "用例审核"}
+        st.rerun()
+    st.subheader("方式二：模型修订")
+    st.caption("发送原 PRD、当前用例及退回理由。只允许修改退回用例；新运行保留来源快照，全部用例重新待审，不继承批准。")
+    vendor = st.selectbox("修订模型服务", ["Google Gemini", "其他兼容接口"], key=f"revision_vendor_{run['id']}")
+    provider = None
+    try:
+        provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
+        st.text(f"模型：{provider.config['model']}\n地址：{provider.config['endpoint']}")
+    except ValueError as error:
+        st.info(str(error))
+    confirmed = st.checkbox("确认发送本轮需求、用例和退回理由到上述模型，额度与费用由服务商项目决定",
+                            key=f"revision_confirm_{run['id']}")
+    if st.button("提交模型修订并开始下一轮", key="model_revision",
+                 disabled=provider is None or not confirmed or not operator.strip()):
+        try:
+            with st.spinner("根据退回意见修订，结果将重新校验…"):
+                child = service.revise_returned(run["id"], run["revision"], operator, provider, request_id())
+            st.session_state["_notice"] = "修订结果已保存为关联新运行。请检查校验结果并重新逐条审核；原运行保留。"
+            go_to(PAGES[1], child)
+        except (ServiceError, ValueError) as error:
+            display_error(error)
+
+
 def detail(service: Service, operator: str) -> None:
     st.title("运行详情与人工复核")
     runs = service.list_runs()
@@ -351,6 +419,15 @@ def detail(service: Service, operator: str) -> None:
             f"\n发起人：{run['operator']} · 生成状态：{run['status']}")
     if run.get("parent_run_id"):
         st.text("关联父运行：" + run["parent_run_id"])
+        if st.button("返回上一轮记录", key="return_parent"):
+            go_to(PAGES[1], run["parent_run_id"])
+    if run["prompt"].get("version") == "REVIEW-R1":
+        st.info("这是退回后的模型修订轮次。原审核记录保留，本轮所有用例需要重新审核。")
+        if run["status"] in {"invalid", "failed"}:
+            st.warning("本次修订未通过。请查看错误，可返回上一轮记录继续人工修订或重新发起模型修订。")
+    if (run.get("validation") or {}).get("warnings"):
+        st.warning("部分退回用例未发生改动，请检查意见是否需要补充需求。")
+        st.code("\n".join(run["validation"]["warnings"]), language=None)
     cols = st.columns(4)
     cases = run.get("cases", [])
     cols[0].metric("当前用例", len(cases))
@@ -364,7 +441,20 @@ def detail(service: Service, operator: str) -> None:
         go_to(PAGES[0])
     st.caption("补充业务规则后需重新生成并审核；自定义输入请使用已配置的模型模式。")
     blockers = service.gate(run_id)
-    tabs = st.tabs(["用例审核", "澄清问题", "需求与提取", "运行记录", "导出"])
+    tab_key = f"detail_tabs_{run_id}"
+    completed = bool(cases) and all(c["status"] != "pending_review" for c in cases)
+    completion_key = f"completion_seen_{run_id}"
+    if completed and st.session_state.get(completion_key) != run["revision"]:
+        st.session_state[completion_key] = run["revision"]
+        st.session_state[tab_key] = "导出" if not blockers else "审核结果"
+    target = st.session_state.get("_detail_target")
+    if target and target["run_id"] == run_id:
+        st.session_state.pop("_detail_target")
+        st.session_state[tab_key] = target["tab"]
+    tabs = st.tabs(["用例审核", "澄清问题", "需求与提取", "运行记录", "导出", "审核结果"],
+                   key=tab_key, on_change="rerun")
+    with tabs[5]:
+        review_result(service, run, operator, blockers)
     with tabs[0]:
         if run["status"] == "valid":
             cases_tab(service, run, operator)
@@ -456,6 +546,8 @@ def main() -> None:
     st.set_page_config(page_title="TraceCase · 需求与测试复核", page_icon="🧭", layout="wide")
     if "_navigate_to" in st.session_state:
         st.session_state["page"] = st.session_state.pop("_navigate_to")
+    if "_selected_run" in st.session_state:
+        st.session_state["selected_run"] = st.session_state.pop("_selected_run")
     if "_draft" in st.session_state:
         st.session_state["prd_text"] = st.session_state.pop("_draft")
         st.session_state["parent_run_id"] = st.session_state.pop("_parent")

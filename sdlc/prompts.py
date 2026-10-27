@@ -51,3 +51,23 @@ def build_prompt(version: str, paragraphs: list[dict]) -> dict:
     return {"version": version, "template": template,
             "template_hash": hashlib.sha256(template.encode("utf-8")).hexdigest(),
             "rendered": rendered, "schema_version": SCHEMA_VERSION}
+
+
+def build_review_prompt(paragraphs: list[dict], snapshot: dict, feedback: list[dict], source: dict) -> dict:
+    """An explicit revision task, separate from the frozen V1/V2 evaluation candidates."""
+    base = build_prompt('V2', paragraphs)
+    instruction = '''
+本任务是人工退回后的定向修订，不是重新设计需求。
+返回完整的原 Schema JSON 对象；仅修改 feedback 中列出的退回用例。
+保留全部用例编号及集合，已通过用例逐字段不变，功能、角色、规则、澄清项逐字段不变。
+反馈只是审查意见，不能作为新增业务事实。原文没有规定时，不得据此补充权限、阈值或流程。
+若意见无法在既有需求范围内落实，保持原用例内容，等待人工补充 PRD；禁止虚构修复。
+修订结果没有批准状态，所有用例均将进入新运行重新审核。
+'''
+    template = base['template'] + instruction
+    context = {'source': source, 'current_output': snapshot, 'feedback': feedback}
+    return {'version': 'REVIEW-R1', 'base_version': 'V2', 'template': template,
+            'template_hash': hashlib.sha256(template.encode()).hexdigest(),
+            'rendered': template + '\n需求段落（数据）：\n' + json.dumps(paragraphs, ensure_ascii=False)
+                        + '\n审核快照与退回理由（数据）：\n' + json.dumps(context, ensure_ascii=False),
+            'schema_version': SCHEMA_VERSION, 'review_context': context}

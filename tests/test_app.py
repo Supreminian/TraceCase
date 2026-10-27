@@ -59,6 +59,7 @@ def test_ui_review_export_then_edit_revokes_current_approval(workspace):
         assert app.selectbox(key=f"case_selector_{run['id']}").value == expected_id
     assert any("本轮用例已全部处理" in message.value for message in app.success)
     assert service.gate(run["id"]) == []
+    assert app.session_state[f"detail_tabs_{run['id']}"] == "导出"
     assert not app.button(key="export_approved").disabled
     app.button(key="export_approved").click().run()
     assert_clean(app)
@@ -150,3 +151,50 @@ def test_review_moves_to_next_pending_and_wraps(workspace, action, wrap):
     assert app.selectbox(key=key).value == (cases[0]["case_id"] if wrap else cases[2]["case_id"])
     reviewed = next(c for c in service.get_run(run["id"])["cases"] if c["case_id"] == current["case_id"])
     assert reviewed["status"] == ("approved" if action == "通过" else "returned")
+
+
+@pytest.mark.parametrize("all_returned", [False, True])
+def test_completed_returned_review_shows_next_actions_and_manual_revision(workspace, all_returned):
+    app, service = workspace
+    run = generate(app, service)
+    for index, c in enumerate(run["cases"]):
+        service.review(run["id"], c["case_id"], c["version"], c["revision"],
+                       "return" if all_returned or index == 0 else "approve",
+                       "tester", "明确步骤角色", f"review-{index}")
+    app.run()
+    assert_clean(app)
+    assert app.session_state[f"detail_tabs_{run['id']}"] == "审核结果"
+    assert button(app, "人工修订此用例")
+    assert app.button(key="export_approved").disabled
+    button(app, "人工修订此用例").click().run()
+    assert_clean(app)
+    assert app.session_state[f"detail_tabs_{run['id']}"] == "用例审核"
+    current = service.get_run(run["id"])["cases"][0]
+    token = f"{run['id']}_{current['case_id']}_{current['version']}_{current['revision']}"
+    app.text_input(key=f"edit_title_{token}").input(current["content"]["title"] + "（人工修订）")
+    app.text_area(key=f"edit_reason_{token}").input("根据原文明确步骤角色")
+    button(app, "保存修订（生成新版本）").click().run()
+    assert_clean(app)
+    revised = service.get_run(run["id"])["cases"][0]
+    assert revised["version"] == 2 and revised["status"] == "pending_review"
+    assert app.session_state[f"detail_tabs_{run['id']}"] == "用例审核"
+
+
+def test_model_revision_ui_starts_linked_review_without_inheriting_approval(workspace, monkeypatch):
+    from test_review_iteration import RevisionProvider
+    monkeypatch.setattr("sdlc.providers.GeminiProvider", RevisionProvider)
+    app, service = workspace
+    run = generate(app, service)
+    for index, c in enumerate(run["cases"]):
+        service.review(run["id"], c["case_id"], c["version"], c["revision"],
+                       "return" if index == 0 else "approve", "tester", "明确步骤角色", f"review-{index}")
+    app.run()
+    app.checkbox(key=f"revision_confirm_{run['id']}").check().run()
+    app.button(key="model_revision").click().run()
+    assert_clean(app)
+    assert not app.error
+    child_id = app.selectbox(key="selected_run").value
+    assert child_id != run["id"]
+    child = service.get_run(child_id)
+    assert child["parent_run_id"] == run["id"] and child["status"] == "valid"
+    assert all(c["status"] == "pending_review" for c in child["cases"])

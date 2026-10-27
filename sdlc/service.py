@@ -14,7 +14,7 @@ from pathlib import Path
 from sdlc import __version__
 from sdlc.domain import Clarification, prepare_input, validate_current, validate_output
 from sdlc.exports import render_export
-from sdlc.prompts import build_prompt
+from sdlc.prompts import build_prompt, build_review_prompt
 from sdlc.providers import FixtureProvider, ProviderError
 
 
@@ -159,7 +159,7 @@ class Service:
         return event_id
 
     def generate(self, text=None, filename=None, data=None, *, operator, prompt_version="v2",
-                 parent_run_id=None, provider=None, request_id=None):
+                 parent_run_id=None, provider=None, request_id=None, review_source_revision=None):
         operator, _ = actor_reason(operator)
         prepared = prepare_input(text=text, filename=filename, data=data)
         provider = provider or FixtureProvider()
@@ -173,7 +173,9 @@ class Service:
         except (OSError, subprocess.CalledProcessError):
             config["commit"] = "uncommitted"
         request_id = request_id or identifier()
-        payload = ["generate", prepared, operator, prompt_version, parent_run_id, config]
+        payload = ["generate", prepared, operator, prompt_version, parent_run_id, config, review_source_revision]
+        revision_snapshot = None
+        returned_ids = set()
         run_id = identifier()
         with self.connection(write=True) as db:
             fingerprint, old = self._request(db, request_id, payload)
@@ -181,10 +183,38 @@ class Service:
                 return old
             if parent_run_id:
                 self._run(db, parent_run_id)
+            if review_source_revision is not None:
+                source = self._check_run_revision(db, parent_run_id, review_source_revision)
+                if source["input"]["input_hash"] != prepared["input_hash"]:
+                    raise ServiceError("需求已改变，请使用修订 PRD 的新运行流程。")
+                cases = self._cases(db, parent_run_id)
+                if not cases or any(c["status"] == "pending_review" for c in cases):
+                    raise ServiceError("请先完成本轮所有用例审核。")
+                returned_ids = {c["case_id"] for c in cases if c["status"] == "returned"}
+                if not returned_ids:
+                    raise ServiceError("本轮没有退回用例，无需模型修订。")
+                if provider.config.get("provider") == "fixture":
+                    raise ServiceError("固定样例不能修订退回意见，请配置实际模型。")
+                revision_snapshot = self._effective(db, parent_run_id, cases)
+                feedback = []
+                for c in cases:
+                    if c["case_id"] in returned_ids:
+                        event = db.execute("""SELECT id,reason,operator,created_at FROM events
+                            WHERE run_id=? AND case_id=? AND version=? AND action='return'
+                            ORDER BY seq DESC LIMIT 1""", (parent_run_id, c["case_id"], c["version"])).fetchone()
+                        if event is None:
+                            raise ServiceError("退回事件缺失，不能开始修订。")
+                        feedback.append({**dict(event), "case_id": c["case_id"], "version": c["version"]})
+                prompt = build_review_prompt(prepared["paragraphs"], revision_snapshot, feedback,
+                                             {"run_id": parent_run_id, "revision": review_source_revision})
             db.execute("""INSERT INTO runs
                 (id,parent_run_id,created_at,operator,status,input_json,config_json,prompt_json)
                 VALUES (?,?,?,?,?,?,?,?)""", (run_id, parent_run_id, now(), operator,
                 "generating", dumps(prepared), dumps(config), dumps(prompt)))
+            if revision_snapshot is not None:
+                self._event(db, parent_run_id, "review_iteration_started", operator,
+                            "将本轮退回意见送入模型修订", details={"child_run_id": run_id,
+                            "source_revision": review_source_revision, "returned_case_ids": sorted(returned_ids)})
             self._event(db, run_id, "generation_started", operator, "开始生成；输入快照已固定")
             self._remember(db, request_id, fingerprint, run_id)
         start = time.perf_counter()
@@ -207,6 +237,22 @@ class Service:
             validation["valid"] = False
             validation["errors"].append("模型响应未正常完成，不能进入审批；原始内容已保留。")
         output = validation.get("output")
+        if validation["valid"] and revision_snapshot is not None:
+            for field in ("features", "roles", "business_rules", "clarifications"):
+                if output[field] != revision_snapshot[field]:
+                    validation["errors"].append(f"修订越界：{field} 必须保持不变；新增业务事实请修订 PRD。")
+            original_cases = {c["case_id"]: c for c in revision_snapshot["test_cases"]}
+            revised_cases = {c["case_id"]: c for c in output["test_cases"]}
+            if set(original_cases) != set(revised_cases):
+                validation["errors"].append("修订不能新增、删除或更换用例编号。")
+            for cid, content in original_cases.items():
+                if cid not in returned_ids and revised_cases.get(cid) != content:
+                    validation["errors"].append(f"修订越界：已通过用例 {cid} 被改动。")
+            unchanged = [cid for cid in sorted(returned_ids)
+                         if revised_cases.get(cid) == original_cases[cid]]
+            if unchanged:
+                validation["warnings"] = ["退回用例未改动：" + ", ".join(unchanged)]
+            validation["valid"] = not validation["errors"]
         with self.connection(write=True) as db:
             if self._run(db, run_id)["status"] != "generating":
                 # A recovered/interrupted run must not be resurrected by a late response.
@@ -230,6 +276,12 @@ class Service:
             self._event(db, run_id, "generation_completed", operator,
                         "结构与引用校验通过" if validation["valid"] else "校验失败；原始输出已保留")
         return run_id
+
+    def revise_returned(self, run_id, expected_run_revision, operator, provider, request_id):
+        source = self.get_run(run_id)
+        return self.generate(text=source["input"]["normalized_text"], operator=operator,
+                             prompt_version="V2", parent_run_id=run_id, provider=provider,
+                             request_id=request_id, review_source_revision=expected_run_revision)
 
     def _run(self, db, run_id):
         row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()

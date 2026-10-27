@@ -4,7 +4,7 @@
 
 | 实际执行 | 结果 |
 | --- | --- |
-| `python -m pytest -q` | 108 passed（包括 4 个 Streamlit AppTest 页面流程） |
+| `python -m pytest -q` | 123 passed（包括 4 个 Streamlit AppTest 页面流程） |
 | `ruff check .` | All checks passed |
 | `python -m evaluation.cli validate` | 20 个样本；dev 12、holdout 8；哈希与标准结构通过；仍为待人工审核草稿 |
 | `python -m pip check` | No broken requirements found |
@@ -35,3 +35,9 @@
 用户首次生成返回 HTTP 400。复现得到 Google 错误 `GenerateContentRequest.contents: contents is not specified`；原因是兼容接口请求只有 system 消息。已补充 user 消息，并在 Google 请求测试中断言用户内容非空。
 
 对同一虚构样例进行关联新运行验证：V1 返回 JSON 但有澄清状态不一致；V2 返回 9 条原始草稿，但将“未提供撤回、冲正或重提流程”列为 BR007 且无关联用例，仍被一致性校验判 invalid。原始响应、Token 与校验错误均已保存；没有自动修改规则、批准用例或绕过校验。此结果仅是连接诊断，不是正式对照评测。
+
+## 审核结果与迭代 · 2026-10-27
+
+新增页面测试验证全部通过自动导航到导出、部分/全部退回的明确反馈、人工新版本复审、模型修订关联新运行与审批不继承；服务测试验证退回事件快照、批准内容锁、规则与编号集合不变、请求幂等、过期请求拒绝、失败保留、固定样例拒绝修订及未改动提示。
+
+模型修订测试使用本地模拟适配器，不调用 Google 或产生费用；它们不代表真实模型一定按反馈正确修订。
