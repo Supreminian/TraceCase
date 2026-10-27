@@ -5,7 +5,8 @@ from uuid import uuid4
 import pytest
 
 from sdlc.providers import FixtureProvider, ModelResponse, list_samples
-from sdlc.service import Service, ServiceError
+from sdlc.service import ServiceError
+from tests.helpers import scoped_service as Service
 
 
 class RevisionProvider:

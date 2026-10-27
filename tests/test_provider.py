@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from sdlc.providers import CompatibleProvider
-from sdlc.service import Service
+from tests.helpers import scoped_service as Service
 
 
 @contextmanager
@@ -113,7 +113,10 @@ def test_ui_disables_unconfigured_model(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     monkeypatch.setenv('SDLC_DB_PATH', str(tmp_path / 'ui.sqlite3'))
     monkeypatch.delenv('SDLC_MODEL_URL', raising=False)
+    service = Service(tmp_path / 'ui.sqlite3')
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py')).run()
+    app.selectbox(key='current_project').select(service.project_id).run()
+    app.radio(key='page').set_value('新建运行').run()
     app.text_input(key='operator').input('tester').run()
     app.radio(key='generation_mode').set_value('模型生成').run()
     assert not app.exception

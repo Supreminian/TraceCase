@@ -22,7 +22,7 @@ def md(value):
 
 def render_export(run, cases, approvals, export_id, fmt):
     fields = [
-        "run_id", "export_id", "prompt_version", "input_hash", "case_id", "version",
+        "project_id", "project_name", "run_id", "export_id", "prompt_version", "input_hash", "case_id", "version",
         "title", "requirement_ids", "paragraph_ids", "preconditions", "steps",
         "expected_results", "priority", "category", "approved_by", "approved_at",
         "approval_event_id",
@@ -32,7 +32,7 @@ def render_export(run, cases, approvals, export_id, fmt):
         c = case["content"]
         approval = approvals[case["case_id"]]
         rows.append(dict(zip(fields, [
-            run["id"], export_id, run["prompt"]["version"], run["input"]["input_hash"],
+            run["project_id"], run["project_name"], run["id"], export_id, run["prompt"]["version"], run["input"]["input_hash"],
             c["case_id"], case["version"], c["title"], ", ".join(c["requirement_ids"]),
             ", ".join(c["paragraph_ids"]), "\n".join(c["preconditions"]),
             "\n".join(f'{s["number"]}. {s["action"]}' for s in c["steps"]),
@@ -46,7 +46,8 @@ def render_export(run, cases, approvals, export_id, fmt):
         writer.writerows({k: safe_cell(v) for k, v in row.items()} for row in rows)
         return stream.getvalue().encode("utf-8-sig"), "text/csv"
     lines = [
-        "# 费用报销测试表 · 批准快照", "",
+        "# 测试用例表 · 批准快照", "",
+        f'项目：{md(run["project_name"])}  ', f'项目 ID：{md(run["project_id"])}  ',
         f'运行：{md(run["id"])}  ', f'导出：{md(export_id)}  ',
         f'Prompt：{md(run["prompt"]["version"])}  ',
         f'输入 SHA-256：{md(run["input"]["input_hash"])}', "",

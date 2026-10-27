@@ -16,6 +16,7 @@ from sdlc.domain import Clarification, prepare_input, validate_current, validate
 from sdlc.exports import render_export
 from sdlc.prompts import build_prompt, build_review_prompt
 from sdlc.providers import FixtureProvider, ProviderError
+from sdlc.storage import initialize
 
 
 class ServiceError(ValueError):
@@ -56,62 +57,13 @@ def safe_metadata(value):
 
 
 class Service:
-    def __init__(self, db_path="data/sdlc.sqlite3"):
+    def __init__(self, db_path="data/sdlc.sqlite3", *, project_id=None):
         self.db_path = str(db_path)
+        self.project_id = project_id
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self.connection(initialize=True) as db:
             db.execute("PRAGMA journal_mode=WAL")
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS runs (
-                    id TEXT PRIMARY KEY, parent_run_id TEXT REFERENCES runs(id),
-                    created_at TEXT NOT NULL, operator TEXT NOT NULL, status TEXT NOT NULL,
-                    input_json TEXT NOT NULL, config_json TEXT NOT NULL, prompt_json TEXT NOT NULL,
-                    raw_output TEXT, validation_json TEXT, output_json TEXT,
-                    error TEXT, latency_ms REAL, total_latency_ms REAL, usage_json TEXT,
-                    revision INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS case_versions (
-                    run_id TEXT NOT NULL REFERENCES runs(id), case_id TEXT NOT NULL,
-                    version INTEGER NOT NULL, content_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL, operator TEXT NOT NULL,
-                    PRIMARY KEY(run_id,case_id,version)
-                );
-                CREATE TABLE IF NOT EXISTS case_heads (
-                    run_id TEXT NOT NULL, case_id TEXT NOT NULL, version INTEGER NOT NULL,
-                    revision INTEGER NOT NULL, status TEXT NOT NULL,
-                    PRIMARY KEY(run_id,case_id),
-                    FOREIGN KEY(run_id,case_id,version) REFERENCES case_versions(run_id,case_id,version)
-                );
-                CREATE TABLE IF NOT EXISTS clarifications (
-                    run_id TEXT NOT NULL REFERENCES runs(id), id TEXT NOT NULL,
-                    content_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
-                    revision INTEGER NOT NULL DEFAULT 1, resolution_json TEXT,
-                    PRIMARY KEY(run_id,id)
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
-                    run_id TEXT NOT NULL REFERENCES runs(id), case_id TEXT, version INTEGER,
-                    action TEXT NOT NULL, operator TEXT NOT NULL, created_at TEXT NOT NULL,
-                    reason TEXT NOT NULL, before_status TEXT, after_status TEXT,
-                    details_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS exports (
-                    id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
-                    format TEXT NOT NULL, filename TEXT NOT NULL, mime TEXT NOT NULL,
-                    operator TEXT NOT NULL, created_at TEXT NOT NULL, content BLOB NOT NULL,
-                    content_hash TEXT NOT NULL, snapshot_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS requests (
-                    id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result_json TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS events_run ON events(run_id,seq);
-                PRAGMA user_version=1;
-            """)
-            for table in ("case_versions", "events", "exports"):
-                for action in ("UPDATE", "DELETE"):
-                    db.execute(f"""CREATE TRIGGER IF NOT EXISTS immutable_{table}_{action}
-                        BEFORE {action} ON {table} BEGIN
-                        SELECT RAISE(ABORT, 'immutable history'); END""")
+            initialize(db, self.db_path)
 
     @contextmanager
     def connection(self, write=False, initialize=False):
@@ -137,7 +89,8 @@ class Service:
     def _request(self, db, request_id, payload):
         if not request_id or len(request_id) > 128:
             raise ServiceError("缺少有效请求标识。")
-        fingerprint = hashlib.sha256(dumps(payload).encode()).hexdigest()
+        self._project(db, active=True)
+        fingerprint = hashlib.sha256(dumps([self.project_id, payload]).encode()).hexdigest()
         row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
         if row:
             if row["fingerprint"] != fingerprint:
@@ -157,6 +110,105 @@ class Service:
             operator, now(), reason, before, after, dumps(details or {})))
         db.execute("UPDATE runs SET revision=revision+1 WHERE id=?", (run_id,))
         return event_id
+
+    def _read_project(self, db, project_id):
+        row = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if row is None:
+            raise ServiceError("项目不存在，请重新选择项目。")
+        return dict(row)
+
+    def _project(self, db, active=False):
+        if not self.project_id:
+            raise ServiceError("请先选择项目。")
+        project = self._read_project(db, self.project_id)
+        if active and project["status"] != "active":
+            raise ServiceError("项目已归档，仅可查看和下载已有快照；恢复后再操作。")
+        return project
+
+    def list_projects(self, limit=200, offset=0):
+        if not 1 <= limit <= 500 or offset < 0:
+            raise ServiceError("项目分页参数无效。")
+        with self.connection() as db:
+            return [dict(r) for r in db.execute("""SELECT p.*,
+                (SELECT COUNT(*) FROM runs r WHERE r.project_id=p.id) AS run_count
+                FROM projects p ORDER BY p.created_at DESC,p.id LIMIT ? OFFSET ?""", (limit, offset))]
+
+    def get_project(self, project_id=None):
+        with self.connection() as db:
+            project = self._read_project(db, project_id) if project_id else self._project(db)
+            project["events"] = [dict(r) for r in db.execute(
+                "SELECT * FROM project_events WHERE project_id=? ORDER BY created_at,id", (project["id"],))]
+            return project
+
+    def _project_fields(self, name, description):
+        name, description = name.strip(), description.strip()
+        if not 1 <= len(name) <= 80 or len(description) > 500:
+            raise ServiceError("项目名称须为 1–80 字符，简介最多 500 字符。")
+        return name, description
+
+    def _project_event(self, db, project_id, action, operator, details):
+        db.execute("INSERT INTO project_events VALUES (?,?,?,?,?,?)",
+                   (identifier(), project_id, action, operator, now(), dumps(details)))
+
+    def create_project(self, name, description, operator):
+        operator, _ = actor_reason(operator)
+        name, description = self._project_fields(name, description)
+        project_id = identifier()
+        with self.connection(write=True) as db:
+            if db.execute("SELECT 1 FROM projects WHERE name_key=?", (name.casefold(),)).fetchone():
+                raise ServiceError("项目名称已存在，请使用其他名称。")
+            stamp = now()
+            db.execute("INSERT INTO projects VALUES (?,?,?,?,?,?,?,?,?)",
+                       (project_id, name, name.casefold(), description, "active", stamp, stamp, operator, 1))
+            self._project_event(db, project_id, "create", operator, {"name": name, "description": description})
+        return project_id
+
+    def update_project(self, project_id, name, description, operator, expected_revision):
+        operator, _ = actor_reason(operator)
+        name, description = self._project_fields(name, description)
+        with self.connection(write=True) as db:
+            old = self._read_project(db, project_id)
+            if old["revision"] != expected_revision:
+                raise ServiceError("项目信息已有变化，请刷新后重试。")
+            if old["status"] != "active":
+                raise ServiceError("请先恢复归档项目，再编辑。")
+            if db.execute("SELECT 1 FROM projects WHERE name_key=? AND id!=?", (name.casefold(), project_id)).fetchone():
+                raise ServiceError("项目名称已存在，请使用其他名称。")
+            db.execute("UPDATE projects SET name=?,name_key=?,description=?,operator=?,updated_at=?,revision=revision+1 WHERE id=?",
+                       (name, name.casefold(), description, operator, now(), project_id))
+            self._project_event(db, project_id, "update", operator,
+                                {"before": {k: old[k] for k in ("name", "description")},
+                                 "after": {"name": name, "description": description}})
+
+    def set_project_archived(self, project_id, archived, operator, expected_revision):
+        operator, _ = actor_reason(operator)
+        with self.connection(write=True) as db:
+            old = self._read_project(db, project_id)
+            if old["revision"] != expected_revision:
+                raise ServiceError("项目状态已有变化，请刷新后重试。")
+            if archived and db.execute("SELECT 1 FROM runs WHERE project_id=? AND status='generating'", (project_id,)).fetchone():
+                raise ServiceError("项目仍有生成中的批次，请先完成或记录中断。")
+            status = "archived" if archived else "active"
+            if old["status"] == status:
+                return
+            db.execute("UPDATE projects SET status=?,operator=?,updated_at=?,revision=revision+1 WHERE id=?",
+                       (status, operator, now(), project_id))
+            self._project_event(db, project_id, "archive" if archived else "restore", operator,
+                                {"before": old["status"], "after": status})
+
+    def project_stats(self):
+        with self.connection() as db:
+            self._project(db)
+            stats = dict(db.execute("""SELECT COUNT(*) AS runs,
+                COALESCE(SUM(status='generating'),0) AS generating,
+                COALESCE(SUM(status IN ('failed','invalid')),0) AS failed
+                FROM runs WHERE project_id=?""", (self.project_id,)).fetchone())
+            stats.update(dict(db.execute("""SELECT COUNT(*) AS cases,
+                COALESCE(SUM(h.status='pending_review'),0) AS pending,
+                COALESCE(SUM(h.status='returned'),0) AS returned,
+                COALESCE(SUM(h.status='approved'),0) AS approved
+                FROM case_heads h JOIN runs r ON r.id=h.run_id WHERE r.project_id=?""", (self.project_id,)).fetchone()))
+            return stats
 
     def generate(self, text=None, filename=None, data=None, *, operator, prompt_version="v2",
                  parent_run_id=None, provider=None, request_id=None, review_source_revision=None):
@@ -208,8 +260,8 @@ class Service:
                 prompt = build_review_prompt(prepared["paragraphs"], revision_snapshot, feedback,
                                              {"run_id": parent_run_id, "revision": review_source_revision})
             db.execute("""INSERT INTO runs
-                (id,parent_run_id,created_at,operator,status,input_json,config_json,prompt_json)
-                VALUES (?,?,?,?,?,?,?,?)""", (run_id, parent_run_id, now(), operator,
+                (id,parent_run_id,project_id,created_at,operator,status,input_json,config_json,prompt_json)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (run_id, parent_run_id, self.project_id, now(), operator,
                 "generating", dumps(prepared), dumps(config), dumps(prompt)))
             if revision_snapshot is not None:
                 self._event(db, parent_run_id, "review_iteration_started", operator,
@@ -287,16 +339,37 @@ class Service:
         row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise ServiceError("运行不存在。")
+        project = self._project(db)
+        if row["project_id"] != self.project_id:
+            raise ServiceError("此批次不属于当前项目。")
         run = dict(row)
+        run["project_name"] = project["name"]
+        run["project_status"] = project["status"]
         for key in ("input", "config", "prompt", "validation", "output", "usage"):
             raw = run.pop(key + "_json")
             run[key] = json.loads(raw) if raw else None
         return run
 
-    def list_runs(self):
+    def list_runs(self, limit=100, offset=0):
         with self.connection() as db:
-            rows = db.execute("SELECT id FROM runs ORDER BY created_at DESC").fetchall()
+            self._project(db)
+            if not 1 <= limit <= 500 or offset < 0:
+                raise ServiceError("批次分页参数无效。")
+            rows = db.execute("SELECT id FROM runs WHERE project_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
+                              (self.project_id, limit, offset)).fetchall()
             return [self._run(db, r["id"]) for r in rows]
+
+    def list_run_summaries(self, limit=50, offset=0, valid_only=False, query=""):
+        with self.connection() as db:
+            self._project(db)
+            if not 1 <= limit <= 500 or offset < 0:
+                raise ServiceError("批次分页参数无效。")
+            return [dict(r) for r in db.execute("""SELECT r.id,r.parent_run_id,r.project_id,r.created_at,
+                r.operator,r.status,r.revision,
+                (SELECT COUNT(*) FROM case_heads h WHERE h.run_id=r.id) AS case_count
+                FROM runs r WHERE r.project_id=? AND (?=0 OR r.status='valid') AND instr(r.id,?)>0
+                ORDER BY r.created_at DESC,r.id LIMIT ? OFFSET ?""",
+                (self.project_id, int(valid_only), query, limit, offset))]
 
     def _cases(self, db, run_id):
         rows = db.execute("""SELECT v.*,h.status,h.revision FROM case_heads h JOIN case_versions v
@@ -557,11 +630,12 @@ class Service:
                 approvals[c["case_id"]] = dict(event)
             export_id = identifier()
             content, mime = render_export(run, cases, approvals, export_id, format)
-            filename = f"approved-{run_id[:8]}-{export_id[:8]}.{format}"
+            filename = f"approved-{self.project_id[:8]}-{run_id[:8]}-{export_id[:8]}.{format}"
             snapshot = [{"case_id": c["case_id"], "version": c["version"],
                          "approval_event_id": approvals[c["case_id"]]["id"]} for c in cases]
-            db.execute("INSERT INTO exports VALUES (?,?,?,?,?,?,?,?,?,?)", (export_id, run_id, format,
-                       filename, mime, operator, now(), content, hashlib.sha256(content).hexdigest(), dumps(snapshot)))
+            db.execute("INSERT INTO exports (id,run_id,format,filename,mime,operator,created_at,content,content_hash,snapshot_json,project_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                       (export_id, run_id, format, filename, mime, operator, now(), content,
+                        hashlib.sha256(content).hexdigest(), dumps(snapshot), run["project_name"]))
             self._event(db, run_id, "export", operator, "导出批准版本", details={"export_id": export_id})
             self._remember(db, request_id, fingerprint, export_id)
             return self._export(db, export_id)
@@ -570,9 +644,21 @@ class Service:
         row = db.execute("SELECT * FROM exports WHERE id=?", (export_id,)).fetchone()
         if not row:
             raise ServiceError("导出快照不存在。")
+        self._run(db, row["run_id"])
         result = dict(row)
+        result["project_id"] = self.project_id
         result["snapshot"] = json.loads(result.pop("snapshot_json"))
         return result
+
+    def list_exports(self, limit=25, offset=0):
+        with self.connection() as db:
+            self._project(db)
+            if not 1 <= limit <= 100 or offset < 0:
+                raise ServiceError("导出分页参数无效。")
+            return [dict(r) for r in db.execute("""SELECT e.id,e.run_id,e.filename,e.format,e.created_at,
+                e.operator,e.content_hash,e.project_name FROM exports e JOIN runs r ON r.id=e.run_id
+                WHERE r.project_id=? ORDER BY e.created_at DESC,e.id LIMIT ? OFFSET ?""",
+                (self.project_id, limit, offset))]
 
     def get_export(self, export_id):
         with self.connection() as db:
@@ -582,6 +668,7 @@ class Service:
         """Explicit recovery; never invalidate another live call on a page refresh."""
         operator, reason = actor_reason(operator, reason)
         with self.connection(write=True) as db:
+            self._project(db, active=True)
             if self._run(db, run_id)["status"] != "generating":
                 raise ServiceError("此运行不处于生成中。")
             db.execute("UPDATE runs SET status='failed',error=? WHERE id=?", ("生成中断：" + reason, run_id))

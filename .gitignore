@@ -10,3 +10,5 @@ evaluation/results/
 *.egg-info/
 .coverage
 htmlcov/
+*.sqlite3
+*.sqlite3-*

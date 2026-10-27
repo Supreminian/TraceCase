@@ -5,7 +5,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from sdlc.providers import list_samples
-from sdlc.service import Service
+from tests.helpers import scoped_service as Service
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,10 +23,13 @@ def assert_clean(app):
 def workspace(tmp_path, monkeypatch):
     path = tmp_path / "app.sqlite3"
     monkeypatch.setenv("SDLC_DB_PATH", str(path))
+    service = Service(path)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20).run()
     assert_clean(app)
+    app.selectbox(key="current_project").select(service.project_id).run()
+    app.radio(key="page").set_value("新建运行").run()
     app.text_input(key="operator").input("demo-reviewer").run()
-    return app, Service(path)
+    return app, service
 
 
 def generate(app, service, sample_id=None):
@@ -179,7 +182,7 @@ def test_completed_returned_review_shows_next_actions_and_manual_revision(worksp
 
 
 def test_model_revision_ui_starts_linked_review_without_inheriting_approval(workspace, monkeypatch):
-    from test_review_iteration import RevisionProvider
+    from tests.test_review_iteration import RevisionProvider
     monkeypatch.setattr("sdlc.providers.GeminiProvider", RevisionProvider)
     app, service = workspace
     run = generate(app, service)
