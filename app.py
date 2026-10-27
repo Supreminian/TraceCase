@@ -128,9 +128,15 @@ def new_run(service: Service, operator: str) -> None:
                 st.rerun()
     parent = st.text_input("关联父运行 ID（可选）", key="parent_run_id",
                            help="补充业务事实或重新生成时关联旧运行；原记录与审批保留。")
-    prompt_version = st.selectbox("Prompt 版本", ["v3", "v2", "v1"], key="prompt_version")
+    prompt_labels = {
+        "v3": "通用需求分析 · 强化引用与澄清关联（推荐）",
+        "v2": "费用报销分析 · 结构约束与边界检查",
+        "v1": "费用报销分析 · 基础生成指令",
+    }
+    prompt_version = st.selectbox("Prompt 版本", list(prompt_labels),
+                                  format_func=prompt_labels.__getitem__, key="prompt_version")
     if prompt_version == "v3":
-        st.caption("V3：按 PRD 实际领域生成，明确规则 ID、段落引用与澄清依赖；尚未完成质量评测。")
+        st.caption("按 PRD 实际领域生成，明确规则 ID、段落引用与澄清依赖；尚未完成质量评测。")
     if mode == "固定样例回放":
         st.caption("样例结果固定，切换 Prompt 仅验证配置留存，不能用于比较模型效果。")
     left, right = st.columns(2)
