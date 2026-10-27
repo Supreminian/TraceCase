@@ -106,7 +106,6 @@ def test_strict_json_rejects_wrappers_arrays_duplicate_keys_and_nonfinite(raw):
     (lambda d: d["test_cases"][0].update(requirement_ids=["R-999"]), "引用不存在"),
     (lambda d: d["test_cases"][0]["steps"][0].update(number=2), "步骤编号"),
     (lambda d: d["test_cases"][0]["steps"][0].update(number=True), "valid integer"),
-    (lambda d: d["test_cases"][0].update(paragraph_ids=["P003"]), "未覆盖"),
     (lambda d: d["test_cases"][0].update(preconditions=[]), "preconditions"),
     (lambda d: d["test_cases"][0].update(title="  "), "non-whitespace"),
     (lambda d: d["test_cases"][0].update(approved=True), "approved"),
@@ -148,6 +147,58 @@ def test_global_blocking_question_requires_all_cases_to_be_marked():
     for case in output["test_cases"]:
         case.update(readiness="needs_clarification", clarification_ids=["CL-HABC"])
     assert validate_current(output, snapshot["paragraphs"]) == []
+
+
+def test_linked_sources_need_not_be_duplicated_and_are_reported_as_hints():
+    snapshot, result = generated()
+    output = result['output']
+    case = output['test_cases'][0]
+    case['paragraph_ids'] = ['P003']
+    output['clarifications'] = [{
+        'id': 'Q-SOURCE', 'question': '该条描述的措辞是否需要调整？',
+        'paragraph_ids': ['P003'], 'requirement_ids': case['requirement_ids'],
+        'affected_case_ids': [case['case_id']], 'scope': 'case', 'blocking': False,
+        'rationale': '仅核对措辞，不改变已明确的业务规则。'}]
+    checked = validate_output(json.dumps(output), snapshot['paragraphs'])
+    assert checked['valid'], checked['errors']
+    assert len(checked['warnings']) == 2
+    assert checked['output']['test_cases'][0]['paragraph_ids'] == ['P003']
+    assert checked['output']['clarifications'][0]['paragraph_ids'] == ['P003']
+    assert validate_current(checked['output'], snapshot['paragraphs']) == []
+
+
+def test_derived_clarification_state_is_computed_and_changes_are_recorded():
+    snapshot, result = generated('ambiguous')
+    output = result['output']
+    affected = next(c for c in output['test_cases'] if c['readiness'] == 'needs_clarification')
+    expected = affected['clarification_ids'].copy()
+    affected.update(clarification_ids=[], readiness='ready')
+    checked = validate_output(json.dumps(output), snapshot['paragraphs'])
+    assert checked['valid'], checked['errors']
+    adjusted = next(c for c in checked['output']['test_cases'] if c['case_id'] == affected['case_id'])
+    assert adjusted['readiness'] == 'needs_clarification'
+    assert adjusted['clarification_ids'] == expected
+    assert checked['adjustments'][0]['before']['readiness'] == 'ready'
+    assert checked['adjustments'][0]['after']['readiness'] == 'needs_clarification'
+    assert affected['readiness'] == 'ready'  # Input object is not mutated.
+    affected['clarification_ids'] = ['NONEXISTENT-QUESTION']
+    invalid = validate_output(json.dumps(output), snapshot['paragraphs'])
+    assert not invalid['valid']
+    assert any('引用不存在' in e for e in invalid['errors'])
+
+
+def test_unexplained_uncertainty_is_preserved_as_a_human_question():
+    snapshot, result = generated()
+    output = result['output']
+    output['test_cases'][0]['readiness'] = 'needs_clarification'
+    checked = validate_output(json.dumps(output), snapshot['paragraphs'])
+    assert checked['valid'], checked['errors']
+    case = checked['output']['test_cases'][0]
+    question = checked['output']['clarifications'][0]
+    assert case['readiness'] == 'needs_clarification'
+    assert question['blocking'] is True and question['scope'] == 'case'
+    assert question['id'] in case['clarification_ids']
+    assert checked['adjustments'][0]['created_clarification_id'] == question['id']
 
 
 def test_nonblocking_question_requires_rationale_but_does_not_block_cases():

@@ -219,9 +219,6 @@ def validate_current(output: dict, paragraphs: list[dict]) -> list[str]:
             errors.append(f"clarifications.{index}.rationale: 非阻断问题必须说明依据")
         if question.scope == "case" and not question.affected_case_ids:
             errors.append(f"clarifications.{index}.affected_case_ids: case 范围须列出影响用例；无局部用例时使用 run")
-        required_paragraphs = {p for r in question.requirement_ids if r in rules for p in rules[r].paragraph_ids}
-        if not required_paragraphs.issubset(question.paragraph_ids):
-            errors.append(f"clarifications.{index}.paragraph_ids: 未覆盖关联规则的来源段落")
     for index, rule in enumerate(parsed.business_rules):
         if rule.status == "clear" and not any(rule.id in case.requirement_ids for case in parsed.test_cases):
             errors.append(f"business_rules.{index}: 明确规则 {rule.id} 完全没有关联用例")
@@ -230,9 +227,6 @@ def validate_current(output: dict, paragraphs: list[dict]) -> list[str]:
     for index, case in enumerate(parsed.test_cases):
         if [step.number for step in case.steps] != list(range(1, len(case.steps) + 1)):
             errors.append(f"test_cases.{index}.steps: 步骤编号必须从 1 开始连续递增")
-        needed = {p for r in case.requirement_ids if r in rules for p in rules[r].paragraph_ids}
-        if not needed.issubset(case.paragraph_ids):
-            errors.append(f"test_cases.{index}.paragraph_ids: 未覆盖关联规则的来源段落")
         blocking_ids = {
             q.id for q in parsed.clarifications if q.blocking and (
                 q.scope == "run" or case.case_id in q.affected_case_ids
@@ -267,5 +261,56 @@ def validate_output(raw: str, paragraphs: list[dict]) -> dict:
             raise ValueError("顶层必须为单一 JSON 对象。")
     except (ValueError, TypeError, RecursionError) as exc:
         return {"json_valid": False, "valid": False, "errors": [f"JSON: {exc}"], "output": None}
+    warnings = []
+    adjustments = []
+    try:
+        # Only compute presentation metadata after strict field/type validation.
+        # Never infer business rules, rewrite unknown references or change source evidence.
+        output = OutputModel.model_validate(output).model_dump()
+        rules = {r['id']: r for r in output['business_rules']}
+        questions = output['clarifications']
+        question_ids = {q['id'] for q in questions}
+        used_ids = {item.get('id', item.get('case_id')) for group in output.values()
+                    if isinstance(group, list) for item in group}
+        for case in output['test_cases']:
+            if set(case['clarification_ids']) - question_ids:
+                continue  # Unknown references still require correction, not silent deletion.
+            blocking = [q['id'] for q in questions if q['blocking'] and (
+                q['scope'] == 'run' or case['case_id'] in q['affected_case_ids']
+                or set(case['requirement_ids']).intersection(q['requirement_ids']))]
+            created_question = None
+            if not blocking and case['readiness'] == 'needs_clarification':
+                # Preserve explicit uncertainty instead of silently declaring it ready.
+                candidate = 'CL-AUTO-' + case['case_id']
+                while candidate in used_ids:
+                    candidate += '-1'
+                created_question = candidate
+                used_ids.add(candidate)
+                question_ids.add(candidate)
+                questions.append({'id': candidate,
+                    'question': f"用例“{case['title']}”被模型标记待澄清但未关联阻断问题，请审核人确认缺失条件。",
+                    'paragraph_ids': case['paragraph_ids'].copy(), 'requirement_ids': [],
+                    'affected_case_ids': [case['case_id']], 'scope': 'case', 'blocking': True,
+                    'rationale': None})
+                blocking = [candidate]
+            readiness = 'needs_clarification' if blocking else 'ready'
+            if set(case['clarification_ids']) != set(blocking) or case['readiness'] != readiness:
+                adjustments.append({'case_id': case['case_id'],
+                    'created_clarification_id': created_question,
+                    'before': {'clarification_ids': case['clarification_ids'], 'readiness': case['readiness']},
+                    'after': {'clarification_ids': blocking, 'readiness': readiness}})
+                case.update(clarification_ids=blocking, readiness=readiness)
+        for group in ('clarifications', 'test_cases'):
+            inherited = [item.get('case_id', item.get('id')) for item in output[group]
+                         if {p for rid in item['requirement_ids'] if rid in rules
+                             for p in rules[rid]['paragraph_ids']} - set(item['paragraph_ids'])]
+            if inherited:
+                warnings.append(f"{'澄清问题' if group == 'clarifications' else '用例'} {', '.join(inherited)} "
+                                "的补充来源可通过关联规则查看，无需重复列出全部段落；请人工核对语义依据。")
+        if adjustments:
+            warnings.append(f"已按问题的实际关联关系整理 {len(adjustments)} 条用例的待澄清状态；未修改业务内容。")
+    except ValidationError:
+        pass  # Return the usual actionable schema errors below.
     errors = validate_current(output, paragraphs)
-    return {"json_valid": True, "valid": not errors, "errors": errors, "output": output}
+    return {"json_valid": True, "valid": not errors, "errors": errors, "output": output,
+            "warnings": warnings, "adjustments": adjustments, "validation_policy": "review-friendly-1"}

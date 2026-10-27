@@ -33,6 +33,20 @@ class ModelProvider(Protocol):
     def generate(self, request: dict) -> ModelResponse: ...
 
 
+@dataclass(frozen=True)
+class SavedOutputProvider:
+    """Replay an immutable stored response locally; never contacts a model."""
+
+    raw_output: str
+
+    @property
+    def config(self):
+        return {"provider": "local-revalidation", "model": "saved-output", "real_model_call": False}
+
+    def generate(self, request: dict) -> ModelResponse:
+        return ModelResponse(self.raw_output, {**self.config, "finish_reason": "stop"})
+
+
 def list_samples() -> list[dict]:
     manifest = json.loads((SAMPLE_DIR / "manifest.json").read_text(encoding="utf-8"))
     return [{"id": item["id"], "label": item["label"],

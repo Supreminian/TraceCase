@@ -48,6 +48,7 @@ def build_prompt(version: str, paragraphs: list[dict]) -> dict:
         template += V2_EXTRA.replace("{schema}", json.dumps(OutputModel.model_json_schema(), ensure_ascii=False, sort_keys=True))
     if version == "V3":
         template = template.replace("从虚构费用报销 Markdown PRD", "从用户提供的 Markdown PRD")
+        template = template.replace("用例来源包含关联规则全部来源。", "用例直接引用相关段落，补充来源可通过关联规则追溯。")
         template = template.replace(
             "边界检查：严格区分 > 与 >=；检查等于阈值与阈值两侧；不推断阈值以下免审；\n"
             "检查审批角色和状态、修改权限、缺失驳回原因、重复发票范围及历史状态。",
@@ -62,7 +63,7 @@ requirement_ids 只能引用本次输出 business_rules[].id，不能引用 feat
 例如规则 id="REQ-PET-003" 时，用例和澄清的 requirement_ids 必须写 ["REQ-PET-003"]；
 若规则 id="BR-PET-003"，则必须引用 ["BR-PET-003"]。来源仍用 P 开头的段落 ID。
 每条明确规则均需被用例引用，拆分后的各条规则也不能遗漏。
-用例和澄清的 paragraph_ids 均须包含其所有关联规则的全部 paragraph_ids，不能漏掉标题段落。
+用例和澄清的 paragraph_ids 引用直接相关且存在的段落，无需重复列出关联规则全部来源或标题段落。
 先建立澄清与用例的关联，再计算每条用例的阻断集合：blocking=true 且 scope=run 的问题，
 以及 affected_case_ids 包含当前 case_id 或 requirement_ids 有交集的问题，均影响当前用例。
 clarification_ids 必须等于上述集合；集合非空时 readiness=needs_clarification，否则 ready。

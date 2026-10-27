@@ -15,7 +15,7 @@ from sdlc import __version__
 from sdlc.domain import Clarification, prepare_input, validate_current, validate_output
 from sdlc.exports import render_export
 from sdlc.prompts import build_prompt, build_review_prompt, build_validation_repair_prompt
-from sdlc.providers import FixtureProvider, ProviderError
+from sdlc.providers import FixtureProvider, ProviderError, SavedOutputProvider
 from sdlc.storage import initialize
 
 
@@ -212,7 +212,7 @@ class Service:
 
     def generate(self, text=None, filename=None, data=None, *, operator, prompt_version="v2",
                  parent_run_id=None, provider=None, request_id=None, review_source_revision=None,
-                 validation_source_revision=None):
+                 validation_source_revision=None, local_revalidation=False):
         operator, _ = actor_reason(operator)
         prepared = prepare_input(text=text, filename=filename, data=data)
         provider = provider or FixtureProvider()
@@ -227,7 +227,7 @@ class Service:
             config["commit"] = "uncommitted"
         request_id = request_id or identifier()
         payload = ["generate", prepared, operator, prompt_version, parent_run_id, config,
-                   review_source_revision, validation_source_revision]
+                   review_source_revision, validation_source_revision, local_revalidation]
         revision_snapshot = None
         returned_ids = set()
         run_id = identifier()
@@ -237,6 +237,8 @@ class Service:
                 return old
             if parent_run_id:
                 self._run(db, parent_run_id)
+            if local_revalidation and validation_source_revision is None:
+                raise ServiceError("本地重新校验必须关联原始运行。")
             if validation_source_revision is not None:
                 if review_source_revision is not None:
                     raise ServiceError("不能同时执行审核修订和校验修复。")
@@ -252,9 +254,18 @@ class Service:
                     raise ServiceError("校验修复需要实际模型。")
                 if len(source["raw_output"]) > 200_000:
                     raise ServiceError("旧输出过大，请拆分 PRD 重新生成。")
-                prompt = build_validation_repair_prompt(prepared["paragraphs"], source["raw_output"],
-                    source["validation"]["errors"],
-                    {"run_id": parent_run_id, "revision": validation_source_revision})
+                if local_revalidation:
+                    if not isinstance(provider, SavedOutputProvider) or provider.raw_output != source['raw_output']:
+                        raise ServiceError("本地重新校验只能复用原始响应。")
+                    prompt = {"version": "LOCAL-RECHECK-R1", "schema_version": "1.0",
+                              "source": {"run_id": parent_run_id, "revision": validation_source_revision},
+                              "source_model_config": source["config"],
+                              "validation_policy": "review-friendly-1",
+                              "rendered": "不调用模型。复用父运行原始响应，按当前策略重新校验并计算澄清状态。"}
+                else:
+                    prompt = build_validation_repair_prompt(prepared["paragraphs"], source["raw_output"],
+                        source["validation"]["errors"],
+                        {"run_id": parent_run_id, "revision": validation_source_revision})
             if review_source_revision is not None:
                 source = self._check_run_revision(db, parent_run_id, review_source_revision)
                 if source["input"]["input_hash"] != prepared["input_hash"]:
@@ -288,8 +299,10 @@ class Service:
                             "将本轮退回意见送入模型修订", details={"child_run_id": run_id,
                             "source_revision": review_source_revision, "returned_case_ids": sorted(returned_ids)})
             if validation_source_revision is not None:
-                self._event(db, parent_run_id, "validation_repair_started", operator,
-                            "将原始输出及校验错误送入模型修复", details={"child_run_id": run_id,
+                self._event(db, parent_run_id,
+                            "local_revalidation_started" if local_revalidation else "validation_repair_started", operator,
+                            "本地整理并重新校验原始输出" if local_revalidation else "将原始输出及校验错误送入模型修复",
+                            details={"child_run_id": run_id,
                             "source_revision": validation_source_revision})
             self._event(db, run_id, "generation_started", operator, "开始生成；输入快照已固定")
             self._remember(db, request_id, fingerprint, run_id)
@@ -337,7 +350,7 @@ class Service:
             unchanged = [cid for cid in sorted(returned_ids)
                          if revised_cases.get(cid) == original_cases[cid]]
             if unchanged:
-                validation["warnings"] = ["退回用例未改动：" + ", ".join(unchanged)]
+                validation.setdefault("warnings", []).append("退回用例未改动：" + ", ".join(unchanged))
             validation["valid"] = not validation["errors"]
         with self.connection(write=True) as db:
             if self._run(db, run_id)["status"] != "generating":
@@ -374,6 +387,13 @@ class Service:
         return self.generate(text=source["input"]["normalized_text"], operator=operator,
                              prompt_version="V3", parent_run_id=run_id, provider=provider,
                              request_id=request_id, validation_source_revision=expected_run_revision)
+
+    def revalidate_existing(self, run_id, expected_run_revision, operator, request_id):
+        source = self.get_run(run_id)
+        return self.generate(text=source["input"]["normalized_text"], operator=operator,
+                             prompt_version="V3", parent_run_id=run_id,
+                             provider=SavedOutputProvider(source["raw_output"]), request_id=request_id,
+                             validation_source_revision=expected_run_revision, local_revalidation=True)
 
     def _run(self, db, run_id):
         row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()

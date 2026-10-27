@@ -76,6 +76,14 @@ def source_view(document: dict, key: str, preferred: list[str] | None = None) ->
     st.code(paragraph_text(paragraph), language="markdown", wrap_lines=True)
 
 
+def linked_source_ids(run: dict, content: dict) -> list[str]:
+    rules = (run.get("output") or {}).get("business_rules", [])
+    direct = list(content["paragraph_ids"])
+    inherited = [p for rule in rules if rule["id"] in content.get("requirement_ids", [])
+                 for p in rule["paragraph_ids"]]
+    return list(dict.fromkeys(direct + inherited))
+
+
 def new_run(service: Service, operator: str) -> None:
     st.title("从需求到可追溯测试")
     st.caption("输入 → 结构校验 → 逐条复核 → 批准导出")
@@ -97,7 +105,7 @@ def new_run(service: Service, operator: str) -> None:
         st.caption("配置环境变量后重启应用。一次生成发送一个请求，不自动重试；输出须人工审核。")
     else:
         st.info("固定样例模式 · 未调用模型。当前只接受与预置样例完全匹配的输入。")
-    st.caption("仅使用虚构的费用报销数据。上传 .md / .markdown，最大 100 KiB；正文最多 20,000 字符。")
+    st.caption("请使用虚构或脱敏的需求文档，无需预先编写段落编号。上传 .md / .markdown，最大 100 KiB；正文最多 20,000 字符。")
     if not operator.strip():
         st.caption("开始前请在页面上方填写操作者标识。")
     source = st.radio("输入方式", ["固定样例", "粘贴 Markdown", "上传 Markdown"],
@@ -216,7 +224,9 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
             st.code("\n".join(values), language=None, wrap_lines=True)
     with right:
         st.subheader("核对原文")
-        source_view(run["input"], f"case_source_{token}", content["paragraph_ids"])
+        sources = linked_source_ids(run, content)
+        st.caption("直接引用及关联规则来源：" + "、".join(sources))
+        source_view(run["input"], f"case_source_{token}", sources)
         st.caption("引用存在不代表内容有依据；请检查边界、权限、前置条件和可判断的预期。")
     st.subheader("逐条审核")
     action = st.radio("审核动作", ["通过", "退回"], horizontal=True, key=f"action_{token}")
@@ -300,8 +310,9 @@ def clarifications_tab(service: Service, run: dict, operator: str) -> None:
         selected = st.selectbox("选择澄清项", list(mapping), key=f"clarification_{run['id']}")
         item = mapping[selected]
         st.json(item)
+        st.caption("直接引用及关联规则来源：" + "、".join(linked_source_ids(run, item["content"])))
         source_view(run["input"], f"clarification_source_{run['id']}_{selected}",
-                    item["content"]["paragraph_ids"])
+                    linked_source_ids(run, item["content"]))
         if item.get("status", "open") == "open":
             with st.form(f"resolve_{run['id']}_{selected}_{run['revision']}"):
                 resolution = st.radio("处理结论", ["原文已明确，属于误报", "不影响执行和判断，可认定非阻断"])
@@ -439,6 +450,15 @@ def validation_repair(service: Service, run: dict, operator: str) -> None:
         return
     errors = validation.get("errors", [])
     st.warning(f"模型已返回完整 JSON，但有 {len(errors)} 项结构或引用校验错误，尚未创建可审核用例。")
+    st.info("这不是对 PRD 写作格式的要求。先由系统整理可计算的状态并重新检查现有结果，无需再次调用模型。")
+    if st.button("整理现有结果并进入审核（不调用模型）", key="local_revalidate",
+                 disabled=not operator.strip() or st.session_state.get("_project_archived", False)):
+        try:
+            child = service.revalidate_existing(run["id"], run["revision"], operator, request_id())
+            st.session_state["_notice"] = "已本地整理原始结果并重新校验，未调用模型；旧记录保留。"
+            go_to(PAGES[1], child)
+        except (ServiceError, ValueError) as error:
+            display_error(error)
     for error in errors[:5]:
         st.text(error)
     with st.expander("携带校验错误修复（创建关联新运行）", expanded=True):
@@ -498,8 +518,11 @@ def detail(service: Service, operator: str) -> None:
         if run["status"] in {"invalid", "failed"}:
             st.warning("本次修订未通过。请查看错误，可返回上一轮记录继续人工修订或重新发起模型修订。")
     if (run.get("validation") or {}).get("warnings"):
-        st.warning("部分退回用例未发生改动，请检查意见是否需要补充需求。")
+        st.info("结果有以下核对提示，可继续逐条审核；来源关联不代表内容已经人工确认。")
         st.code("\n".join(run["validation"]["warnings"]), language=None)
+    if (run.get("validation") or {}).get("adjustments"):
+        with st.expander("查看系统自动整理记录（业务内容未修改）"):
+            st.json(run["validation"]["adjustments"])
     if run.get("config", {}).get("finish_reason") == "length":
         limit = run["config"].get("parameters", {}).get("max_tokens", "未知")
         st.error(f"本次模型输出被长度限制截断（请求上限 {limit} Token），不是 PRD 文件格式错误。")

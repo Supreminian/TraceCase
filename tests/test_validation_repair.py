@@ -105,3 +105,53 @@ def test_ui_repair_requires_confirmation_and_navigates_to_child(tmp_path, monkey
     assert child_id != source['id']
     assert service.get_run(child_id)['status'] == 'valid'
     assert len(provider.calls) == 1
+
+
+def legacy_source_run(tmp_path):
+    import sqlite3
+    service, source, raw = setup_run(tmp_path)
+    output = json.loads(raw)
+    output['test_cases'][0]['paragraph_ids'] = ['P003']
+    original = json.dumps(output)
+    validation = {'json_valid': True, 'valid': False,
+                  'errors': ['test_cases.0.paragraph_ids: 未覆盖关联规则的来源段落'], 'output': output}
+    with sqlite3.connect(service.db_path) as db:
+        db.execute('UPDATE runs SET raw_output=?,validation_json=?,output_json=? WHERE id=?',
+                   (original, json.dumps(validation), original, source['id']))
+    return service, service.get_run(source['id'])
+
+
+def test_local_revalidation_of_legacy_result_never_contacts_model(tmp_path):
+    service, source = legacy_source_run(tmp_path)
+    key = uuid4().hex
+    child_id = service.revalidate_existing(source['id'], source['revision'], 'tester', key)
+    child = service.get_run(child_id)
+    assert child['status'] == 'valid'
+    assert child['raw_output'] == source['raw_output']
+    assert child['validation']['warnings']
+    assert child['config']['real_model_call'] is False
+    assert child['usage'] is None
+    assert child['prompt']['version'] == 'LOCAL-RECHECK-R1'
+    assert child['prompt']['source_model_config'] == source['config']
+    assert all(c['status'] == 'pending_review' for c in child['cases'])
+    assert service.gate(child_id)
+    assert service.get_run(source['id'])['validation'] == source['validation']
+    assert service.revalidate_existing(source['id'], source['revision'], 'tester', key) == child_id
+
+
+def test_ui_can_revalidate_locally_without_key_or_model_confirmation(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    service, source = legacy_source_run(tmp_path)
+    monkeypatch.setenv('SDLC_DB_PATH', service.db_path)
+    for name in ('GEMINI_API_KEY', 'GOOGLE_API_KEY'):
+        monkeypatch.delenv(name, raising=False)
+    app = AppTest.from_file(str(Path('app.py').resolve())).run()
+    app.selectbox(key='current_project').select(service.project_id).run()
+    app.text_input(key='operator').input('tester').run()
+    app.radio(key='page').set_value('运行详情与审核').run()
+    assert not app.button(key='local_revalidate').disabled
+    app.button(key='local_revalidate').click().run()
+    assert not app.exception
+    child = service.get_run(app.session_state['selected_run'])
+    assert child['status'] == 'valid' and child['parent_run_id'] == source['id']
+    assert child['config']['real_model_call'] is False

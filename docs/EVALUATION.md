@@ -2,6 +2,8 @@
 
 当前交付包含 **20 份 AI 起草的虚构报销 PRD 及候选 gold 标准、固定 12/8 划分、120 条调用计划和评分工具**。标准状态为 `draft_pending_human_review`，`reviewer=null`；尚未人工审核或冻结，尚未调用实际模型、产生正式结果或证明 Prompt V2 有提升。固定样例和单元测试中的合成输出只验证程序。
 
+运行时校验策略已更新为 `review-friendly-1`：缺少重复的关联来源仅作提示，派生的澄清状态可由系统整理，并在 `validation.adjustments` 记录差异。评测必须区分模型原始响应和系统整理后的可审核结果，注明校验策略，不能把本地重新校验或系统整理的通过率当作模型原始生成质量提升。V1/V2 模板保持不变。
+
 输入位于 `evaluation/samples/dev/` 与 `evaluation/samples/holdout/`，稳定 ID 为 `EXP-001` 至 `EXP-020`。每份 Markdown 对应一份 `.gold.json`；`evaluation/manifest.json` 记录源文档和标准文件 SHA-256、split、版本和审核状态。留出集的标准创建属于数据准备；不要阅读其模型结果来调整 Prompt。
 
 ## 1. 验证与调用计划
