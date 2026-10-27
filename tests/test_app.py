@@ -51,7 +51,6 @@ def test_ui_review_export_then_edit_revokes_current_approval(workspace):
         current = next(c for c in service.get_run(run["id"])["cases"]
                        if c["case_id"] == case["case_id"])
         token = f"{run['id']}_{case['case_id']}_{current['version']}_{current['revision']}"
-        app.text_area(key=f"review_reason_{token}").input("已逐条核对原文、边界、步骤与预期")
         button(app, "提交审核").click().run()
         assert_clean(app)
         assert not app.error
@@ -100,8 +99,6 @@ def test_ui_ambiguous_case_cannot_be_approved_or_exported(workspace):
     assert run["clarifications"]
     blocked = next(case for case in run["cases"] if case["content"]["readiness"] == "needs_clarification")
     app.selectbox(key=f"case_selector_{run['id']}").select(blocked["case_id"]).run()
-    token = f"{run['id']}_{blocked['case_id']}_{blocked['version']}_{blocked['revision']}"
-    app.text_area(key=f"review_reason_{token}").input("尝试通过待澄清用例以检查门禁")
     button(app, "提交审核").click().run()
     assert_clean(app)
     assert app.error
@@ -143,8 +140,9 @@ def test_review_moves_to_next_pending_and_wraps(workspace, action, wrap):
     key = f"case_selector_{run['id']}"
     app.selectbox(key=key).select(current["case_id"]).run()
     token = f"{run['id']}_{current['case_id']}_{current['version']}_{current['revision']}"
-    app.radio(key=f"action_{token}").set_value(action)
-    app.text_area(key=f"review_reason_{token}").input("核对完成或退回修订")
+    app.radio(key=f"action_{token}").set_value(action).run()
+    if action == "退回":
+        app.text_area(key=f"review_reason_{token}").input("核对完成或退回修订")
     button(app, "提交审核").click().run()
     assert_clean(app)
     assert not app.error
@@ -198,3 +196,37 @@ def test_model_revision_ui_starts_linked_review_without_inheriting_approval(work
     child = service.get_run(child_id)
     assert child["parent_run_id"] == run["id"] and child["status"] == "valid"
     assert all(c["status"] == "pending_review" for c in child["cases"])
+
+
+def test_quick_approval_records_selected_note_without_text(workspace):
+    app, service = workspace
+    run = generate(app, service)
+    c = run["cases"][0]
+    token = f"{run['id']}_{c['case_id']}_{c['version']}_{c['revision']}"
+    app.selectbox(key=f"approval_note_{token}").select("与需求一致").run()
+    assert not any(x.key == f"review_reason_{token}" for x in app.text_area)
+    button(app, "提交审核").click().run()
+    assert_clean(app)
+    event = next(e for e in service.get_run(run["id"])["events"] if e["action"] == "approve")
+    assert event["reason"] == "与需求一致"
+
+
+@pytest.mark.parametrize("action", ["通过", "退回"])
+def test_custom_approval_and_return_still_require_text(workspace, action):
+    app, service = workspace
+    run = generate(app, service)
+    c = run["cases"][0]
+    token = f"{run['id']}_{c['case_id']}_{c['version']}_{c['revision']}"
+    if action == "通过":
+        app.selectbox(key=f"approval_note_{token}").select("其他（填写说明）").run()
+    else:
+        app.radio(key=f"action_{token}").set_value(action).run()
+    button(app, "提交审核").click().run()
+    assert_clean(app)
+    assert app.error
+    assert service.get_run(run["id"])["cases"][0]["status"] == "pending_review"
+    app.text_area(key=f"review_reason_{token}").input("具体审核说明")
+    button(app, "提交审核").click().run()
+    assert_clean(app)
+    event = next(e for e in service.get_run(run["id"])["events"] if e["action"] == ("approve" if action == "通过" else "return"))
+    assert event["reason"] == "具体审核说明"

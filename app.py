@@ -200,11 +200,22 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
         st.subheader("核对原文")
         source_view(run["input"], f"case_source_{token}", content["paragraph_ids"])
         st.caption("引用存在不代表内容有依据；请检查边界、权限、前置条件和可判断的预期。")
+    st.subheader("逐条审核")
+    action = st.radio("审核动作", ["通过", "退回"], horizontal=True, key=f"action_{token}")
+    approval_note = None
+    if action == "通过":
+        approval_note = st.selectbox("通过说明", ["通过，无需补充说明", "与需求一致", "步骤和预期清晰",
+                                            "边界覆盖符合要求", "其他（填写说明）"],
+                                     key=f"approval_note_{token}")
     with st.form(f"review_{token}"):
-        st.subheader("逐条审核")
-        action = st.radio("审核动作", ["通过", "退回"], horizontal=True, key=f"action_{token}")
-        reason = st.text_area("审核理由", key=f"review_reason_{token}",
-                              placeholder="说明已核对的依据，或具体退回原因。")
+        if action == "退回":
+            reason = st.text_area("退回原因（必填）", key=f"review_reason_{token}",
+                                  placeholder="说明具体问题，便于人工或模型修订。")
+        elif approval_note == "其他（填写说明）":
+            reason = st.text_area("补充说明（必填）", key=f"review_reason_{token}")
+        else:
+            reason = approval_note
+            st.caption("无需填写文字；提交后记录所选说明，并进入下一个待审核用例。")
         submitted = st.form_submit_button("提交审核", type="primary", disabled=not operator.strip())
     if submitted:
         try:
