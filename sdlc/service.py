@@ -14,7 +14,7 @@ from pathlib import Path
 from sdlc import __version__
 from sdlc.domain import Clarification, prepare_input, validate_current, validate_output
 from sdlc.exports import render_export
-from sdlc.prompts import build_prompt, build_review_prompt
+from sdlc.prompts import build_prompt, build_review_prompt, build_validation_repair_prompt
 from sdlc.providers import FixtureProvider, ProviderError
 from sdlc.storage import initialize
 
@@ -211,7 +211,8 @@ class Service:
             return stats
 
     def generate(self, text=None, filename=None, data=None, *, operator, prompt_version="v2",
-                 parent_run_id=None, provider=None, request_id=None, review_source_revision=None):
+                 parent_run_id=None, provider=None, request_id=None, review_source_revision=None,
+                 validation_source_revision=None):
         operator, _ = actor_reason(operator)
         prepared = prepare_input(text=text, filename=filename, data=data)
         provider = provider or FixtureProvider()
@@ -225,7 +226,8 @@ class Service:
         except (OSError, subprocess.CalledProcessError):
             config["commit"] = "uncommitted"
         request_id = request_id or identifier()
-        payload = ["generate", prepared, operator, prompt_version, parent_run_id, config, review_source_revision]
+        payload = ["generate", prepared, operator, prompt_version, parent_run_id, config,
+                   review_source_revision, validation_source_revision]
         revision_snapshot = None
         returned_ids = set()
         run_id = identifier()
@@ -235,6 +237,24 @@ class Service:
                 return old
             if parent_run_id:
                 self._run(db, parent_run_id)
+            if validation_source_revision is not None:
+                if review_source_revision is not None:
+                    raise ServiceError("不能同时执行审核修订和校验修复。")
+                source = self._run(db, parent_run_id)
+                if source["revision"] != validation_source_revision:
+                    raise ServiceError("运行记录已有变化，请刷新后重试。")
+                if (source["status"] != "invalid" or not source.get("validation", {}).get("json_valid")
+                        or source.get("config", {}).get("finish_reason") not in {None, "stop"}):
+                    raise ServiceError("仅完整返回 JSON 但校验失败的运行可进行结构修复。")
+                if source["input"]["input_hash"] != prepared["input_hash"]:
+                    raise ServiceError("修复必须使用原始 PRD；需求已改变时请创建新运行。")
+                if provider.config.get("provider") == "fixture":
+                    raise ServiceError("校验修复需要实际模型。")
+                if len(source["raw_output"]) > 200_000:
+                    raise ServiceError("旧输出过大，请拆分 PRD 重新生成。")
+                prompt = build_validation_repair_prompt(prepared["paragraphs"], source["raw_output"],
+                    source["validation"]["errors"],
+                    {"run_id": parent_run_id, "revision": validation_source_revision})
             if review_source_revision is not None:
                 source = self._check_run_revision(db, parent_run_id, review_source_revision)
                 if source["input"]["input_hash"] != prepared["input_hash"]:
@@ -267,6 +287,10 @@ class Service:
                 self._event(db, parent_run_id, "review_iteration_started", operator,
                             "将本轮退回意见送入模型修订", details={"child_run_id": run_id,
                             "source_revision": review_source_revision, "returned_case_ids": sorted(returned_ids)})
+            if validation_source_revision is not None:
+                self._event(db, parent_run_id, "validation_repair_started", operator,
+                            "将原始输出及校验错误送入模型修复", details={"child_run_id": run_id,
+                            "source_revision": validation_source_revision})
             self._event(db, run_id, "generation_started", operator, "开始生成；输入快照已固定")
             self._remember(db, request_id, fingerprint, run_id)
         start = time.perf_counter()
@@ -344,6 +368,12 @@ class Service:
         return self.generate(text=source["input"]["normalized_text"], operator=operator,
                              prompt_version="V2", parent_run_id=run_id, provider=provider,
                              request_id=request_id, review_source_revision=expected_run_revision)
+
+    def repair_validation(self, run_id, expected_run_revision, operator, provider, request_id):
+        source = self.get_run(run_id)
+        return self.generate(text=source["input"]["normalized_text"], operator=operator,
+                             prompt_version="V3", parent_run_id=run_id, provider=provider,
+                             request_id=request_id, validation_source_revision=expected_run_revision)
 
     def _run(self, db, run_id):
         row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()

@@ -187,7 +187,17 @@ def test_prompt_versions_are_distinct_reproducible_and_preserve_untrusted_text_a
     assert build_prompt("V2", paragraphs) == v2
     assert build_prompt("v2", paragraphs) == v2
     with pytest.raises(ValueError, match="版本"):
-        build_prompt("V3", paragraphs)
+        build_prompt("V4", paragraphs)
+
+
+def test_v3_reference_contract_and_domain_are_explicit():
+    paragraphs = prepare_input(text="# 桌宠 PRD\n\nREQ-PET-003：窗口随猫移动。")['paragraphs']
+    prompt = build_prompt("V3", paragraphs)
+    assert prompt['version'] == 'V3'
+    assert '从用户提供的 Markdown PRD' in prompt['template']
+    assert 'requirement_ids 只能引用本次输出 business_rules[].id' in prompt['template']
+    assert 'clarification_ids 必须等于上述集合' in prompt['template']
+    assert prompt['template_hash'] != build_prompt('V2', paragraphs)['template_hash']
 
 
 def test_saved_schema_matches_model():

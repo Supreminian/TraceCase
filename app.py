@@ -128,7 +128,9 @@ def new_run(service: Service, operator: str) -> None:
                 st.rerun()
     parent = st.text_input("关联父运行 ID（可选）", key="parent_run_id",
                            help="补充业务事实或重新生成时关联旧运行；原记录与审批保留。")
-    prompt_version = st.selectbox("Prompt 版本", ["v2", "v1"], key="prompt_version")
+    prompt_version = st.selectbox("Prompt 版本", ["v3", "v2", "v1"], key="prompt_version")
+    if prompt_version == "v3":
+        st.caption("V3：按 PRD 实际领域生成，明确规则 ID、段落引用与澄清依赖；尚未完成质量评测。")
     if mode == "固定样例回放":
         st.caption("样例结果固定，切换 Prompt 仅验证配置留存，不能用于比较模型效果。")
     left, right = st.columns(2)
@@ -424,6 +426,41 @@ def review_result(service: Service, run: dict, operator: str, blockers: list[str
             display_error(error)
 
 
+def validation_repair(service: Service, run: dict, operator: str) -> None:
+    validation = run.get("validation") or {}
+    if not (run["status"] == "invalid" and validation.get("json_valid")
+            and run["config"].get("finish_reason") in {None, "stop"}):
+        return
+    errors = validation.get("errors", [])
+    st.warning(f"模型已返回完整 JSON，但有 {len(errors)} 项结构或引用校验错误，尚未创建可审核用例。")
+    for error in errors[:5]:
+        st.text(error)
+    with st.expander("携带校验错误修复（创建关联新运行）", expanded=True):
+        st.caption("发送原 PRD、原始输出及全部校验错误，使用 VALIDATION-R1 提示修复。"
+                   "新结果仍需完整校验和人工审核；不会覆盖旧运行，也不保证一次修复成功。")
+        vendor = st.selectbox("校验修复模型服务", ["Google Gemini", "其他兼容接口"],
+                              key=f"repair_vendor_{run['id']}")
+        provider = None
+        try:
+            provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
+            st.json(provider.config)
+        except ValueError as error:
+            st.info(str(error))
+        confirmed = st.checkbox("确认发送原 PRD、旧输出及错误到上述模型，消耗一次调用额度并可能产生费用",
+                                key=f"repair_confirm_{run['id']}")
+        if st.button("修复校验错误并创建新运行", key="repair_validation",
+                     disabled=provider is None or not confirmed or not operator.strip()
+                     or st.session_state.get("_project_archived", False)):
+            try:
+                with st.spinner("正在修复结构与引用，随后重新校验…"):
+                    child = service.repair_validation(run["id"], run["revision"], operator,
+                                                      provider, request_id())
+                st.session_state["_notice"] = "修复结果已保存为关联新运行；请检查校验结果，通过后逐条审核。"
+                go_to(PAGES[1], child)
+            except (ServiceError, ValueError) as error:
+                display_error(error)
+
+
 def detail(service: Service, operator: str) -> None:
     st.title("运行详情与人工复核")
     runs = service.list_run_summaries(limit=100)
@@ -498,6 +535,7 @@ def detail(service: Service, operator: str) -> None:
             st.error("本次运行尚无通过校验的生成结果，不能进入审核。")
             if run.get("error"):
                 st.code(run["error"], language=None, wrap_lines=True)
+            validation_repair(service, run, operator)
             st.json(run.get("validation", {}))
             if run["status"] == "generating":
                 st.info("若上次应用进程已经退出，可记录为生成中断，再创建关联运行重试。")
