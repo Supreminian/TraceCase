@@ -317,7 +317,7 @@ def exports_view(service: Service, run: dict, operator: str, blockers: list[str]
         st.warning("当前运行尚不能导出批准版本。")
         st.code("\n".join(blockers), language=None, wrap_lines=True)
     else:
-        st.success("当前全部用例通过，且没有未处理的阻断问题。")
+        st.success("本轮审核全部通过。下一步：选择 CSV 或 Markdown，点击“生成批准版本文件”，再下载快照。")
     col1, col2 = st.columns([1, 2])
     format_name = col1.selectbox("导出格式", ["CSV", "Markdown"], key=f"format_{run['id']}")
     if col2.button("生成批准版本文件", type="primary", key="export_approved",
