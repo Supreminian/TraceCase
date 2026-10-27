@@ -56,7 +56,7 @@ def test_real_adapter_to_local_mock_and_review_gate(tmp_path, monkeypatch):
         assert service.gate(run_id)
         assert len(calls) == 1
         assert calls[0][0] == 'Bearer test-secret'
-        assert calls[0][1]['max_tokens'] == 4096
+        assert calls[0][1]['max_tokens'] == 32768
         assert '自定义测试输入' in calls[0][1]['messages'][0]['content']
 
 
@@ -124,9 +124,12 @@ def test_ui_disables_unconfigured_model(tmp_path, monkeypatch):
     assert app.warning
 
 
-def test_truncated_response_cannot_enter_review(tmp_path, monkeypatch):
+@pytest.mark.parametrize('truncate_json', [False, True])
+def test_truncated_response_cannot_enter_review(tmp_path, monkeypatch, truncate_json):
     raw = Path('samples/normal.output.json').read_text()
-    with server(body={'choices': [{'message': {'content': raw}, 'finish_reason': 'length'}]}) as (url, _):
+    if truncate_json:
+        raw = raw[:len(raw) // 2]
+    with server(body={'choices': [{'message': {'content': raw}, 'finish_reason': 'length'}]}) as (url, calls):
         configure(monkeypatch, url)
         service = Service(tmp_path / 'run.sqlite3')
         run_id = service.generate(text=Path('samples/normal.md').read_text(), operator='tester', provider=CompatibleProvider())
@@ -134,3 +137,16 @@ def test_truncated_response_cannot_enter_review(tmp_path, monkeypatch):
         assert run['status'] == 'invalid'
         assert run['raw_output'] == raw
         assert run['cases'] == [] and service.gate(run_id)
+        assert '被截断' in run['validation']['errors'][0]
+        assert 'SDLC_MODEL_MAX_TOKENS' in run['validation']['errors'][0]
+        assert run['config']['finish_reason'] == 'length'
+        assert len(calls) == 1  # No automatic retry, even for a syntactically complete response.
+
+
+def test_output_budget_and_timeout_can_be_overridden(monkeypatch):
+    configure(monkeypatch, 'http://localhost:1234/v1/chat/completions')
+    monkeypatch.setenv('SDLC_MODEL_MAX_TOKENS', '8192')
+    monkeypatch.setenv('SDLC_MODEL_TIMEOUT', '90')
+    provider = CompatibleProvider()
+    assert provider.config['parameters']['max_tokens'] == 8192
+    assert provider.config['timeout_seconds'] == 90

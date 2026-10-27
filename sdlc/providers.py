@@ -96,8 +96,8 @@ class CompatibleProvider:
         if '\r' in key or '\n' in key:
             raise ValueError('密钥格式无效。')
         try:
-            timeout = int(os.environ.get('SDLC_MODEL_TIMEOUT', '60'))
-            limit = int(os.environ.get('SDLC_MODEL_MAX_TOKENS', '4096'))
+            timeout = int(os.environ.get('SDLC_MODEL_TIMEOUT', '180'))
+            limit = int(os.environ.get('SDLC_MODEL_MAX_TOKENS', '32768'))
         except ValueError as exc:
             raise ValueError('超时和输出 Token 上限必须是整数。') from exc
         if not 1 <= timeout <= 300 or not 128 <= limit <= 32768:

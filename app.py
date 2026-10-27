@@ -457,6 +457,13 @@ def detail(service: Service, operator: str) -> None:
     if (run.get("validation") or {}).get("warnings"):
         st.warning("部分退回用例未发生改动，请检查意见是否需要补充需求。")
         st.code("\n".join(run["validation"]["warnings"]), language=None)
+    if run.get("config", {}).get("finish_reason") == "length":
+        limit = run["config"].get("parameters", {}).get("max_tokens", "未知")
+        st.error(f"本次模型输出被长度限制截断（请求上限 {limit} Token），不是 PRD 文件格式错误。")
+        st.info("下一步：点击下方“基于本次输入创建关联新运行”，选择模型生成，"
+                "检查新运行的 max_tokens 上限后重新生成。应用当前默认上限为 32768，"
+                "环境变量配置可覆盖该值；若仍被截断，请按功能拆分 PRD。"
+                "旧运行记录保留，不会自动重试。")
     cols = st.columns(4)
     cases = run.get("cases", [])
     cols[0].metric("当前用例", len(cases))

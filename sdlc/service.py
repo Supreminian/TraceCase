@@ -285,9 +285,19 @@ class Service:
                 self._event(db, run_id, "generation_failed", operator, message)
             return run_id
         validation = validate_output(response.raw_output, prepared["paragraphs"])
-        if response.metadata.get("finish_reason") in {"length", "content_filter", "tool_calls"}:
+        finish_reason = response.metadata.get("finish_reason")
+        if finish_reason in {"length", "content_filter", "tool_calls"}:
             validation["valid"] = False
-            validation["errors"].append("模型响应未正常完成，不能进入审批；原始内容已保留。")
+            if finish_reason == "length":
+                validation["errors"].insert(0,
+                    "模型输出达到长度上限，被截断；不能进入审核，原始内容已保留。"
+                    "请检查模型配置中的 parameters.max_tokens，调高 SDLC_MODEL_MAX_TOKENS 后重启应用，"
+                    "再基于本次输入创建关联新运行；若已达模型支持上限，请按功能拆分 PRD 分别生成。"
+                    "不会自动重试或额外消耗模型额度。")
+            elif finish_reason == "content_filter":
+                validation["errors"].insert(0, "模型服务的内容过滤中断了输出；不能进入审核，原始内容已保留。")
+            else:
+                validation["errors"].insert(0, "模型返回工具调用而非完整结果；不能进入审核，原始内容已保留。")
         output = validation.get("output")
         if validation["valid"] and revision_snapshot is not None:
             for field in ("features", "roles", "business_rules", "clarifications"):
