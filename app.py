@@ -171,7 +171,13 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
         st.info("当前运行没有可审核用例。请查看校验与原始输出。")
         return
     mapping = {case["case_id"]: case for case in cases}
-    case_id = st.selectbox("选择用例", list(mapping), key=f"case_selector_{run['id']}")
+    selector_key = f"case_selector_{run['id']}"
+    jump = st.session_state.get("_review_next")
+    if jump and jump["run_id"] == run["id"]:
+        st.session_state.pop("_review_next")
+        if jump["case_id"] in mapping:
+            st.session_state[selector_key] = jump["case_id"]
+    case_id = st.selectbox("选择用例", list(mapping), key=selector_key)
     case = mapping[case_id]
     content = case["content"]
     token = f"{run['id']}_{case_id}_{case['version']}_{case['revision']}"
@@ -204,7 +210,16 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
         try:
             service.review(run["id"], case_id, case["version"], case["revision"],
                            "approve" if action == "通过" else "return", operator, reason, request_id())
-            success("审核事件已保存。")
+            current_cases = {c["case_id"]: c for c in service.get_run(run["id"])["cases"]}
+            ids = list(mapping)
+            index = ids.index(case_id)
+            ordered = ids[index + 1:] + ids[:index]
+            next_id = next((cid for cid in ordered
+                            if current_cases[cid]["status"] == "pending_review"), None)
+            if next_id:
+                st.session_state["_review_next"] = {"run_id": run["id"], "case_id": next_id}
+                success("审核事件已保存，已切换到下一个待审核用例。")
+            success("审核事件已保存，本轮用例已全部处理；退回项仍需修订后复审。")
         except (ServiceError, ValueError) as error:
             display_error(error)
     with st.expander("修改当前用例 · 保存后重新审核"):

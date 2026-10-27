@@ -46,7 +46,7 @@ def test_ui_review_export_then_edit_revokes_current_approval(workspace):
     assert service.gate(run["id"])
     assert app.button(key="export_approved").disabled
     first_case_id = run["cases"][0]["case_id"]
-    for case in run["cases"]:
+    for index, case in enumerate(run["cases"]):
         app.selectbox(key=f"case_selector_{run['id']}").select(case["case_id"]).run()
         current = next(c for c in service.get_run(run["id"])["cases"]
                        if c["case_id"] == case["case_id"])
@@ -55,6 +55,9 @@ def test_ui_review_export_then_edit_revokes_current_approval(workspace):
         button(app, "提交审核").click().run()
         assert_clean(app)
         assert not app.error
+        expected_id = run["cases"][index + 1]["case_id"] if index + 1 < len(run["cases"]) else case["case_id"]
+        assert app.selectbox(key=f"case_selector_{run['id']}").value == expected_id
+    assert any("本轮用例已全部处理" in message.value for message in app.success)
     assert service.gate(run["id"]) == []
     assert not app.button(key="export_approved").disabled
     app.button(key="export_approved").click().run()
@@ -101,6 +104,7 @@ def test_ui_ambiguous_case_cannot_be_approved_or_exported(workspace):
     button(app, "提交审核").click().run()
     assert_clean(app)
     assert app.error
+    assert app.selectbox(key=f"case_selector_{run['id']}").value == blocked["case_id"]
     refreshed = service.get_run(run["id"])
     assert all(case["status"] != "approved" for case in refreshed["cases"])
     assert app.button(key="export_approved").disabled
@@ -122,3 +126,27 @@ def test_ui_requires_operator_and_retains_failed_generation(workspace):
     assert run["status"] == "failed"
     assert app.button(key="export_approved").disabled
     assert run["raw_output"] is None
+
+
+@pytest.mark.parametrize("action", ["通过", "退回"])
+@pytest.mark.parametrize("wrap", [False, True])
+def test_review_moves_to_next_pending_and_wraps(workspace, action, wrap):
+    app, service = workspace
+    run = generate(app, service)
+    cases = run["cases"]
+    # A previously handled case must not be selected by automatic navigation.
+    skipped = cases[1]
+    service.review(run["id"], skipped["case_id"], skipped["version"], skipped["revision"],
+                   "approve", "demo-reviewer", "已核对", "skip-case")
+    current = cases[-1] if wrap else cases[0]
+    key = f"case_selector_{run['id']}"
+    app.selectbox(key=key).select(current["case_id"]).run()
+    token = f"{run['id']}_{current['case_id']}_{current['version']}_{current['revision']}"
+    app.radio(key=f"action_{token}").set_value(action)
+    app.text_area(key=f"review_reason_{token}").input("核对完成或退回修订")
+    button(app, "提交审核").click().run()
+    assert_clean(app)
+    assert not app.error
+    assert app.selectbox(key=key).value == (cases[0]["case_id"] if wrap else cases[2]["case_id"])
+    reviewed = next(c for c in service.get_run(run["id"])["cases"] if c["case_id"] == current["case_id"])
+    assert reviewed["status"] == ("approved" if action == "通过" else "returned")
