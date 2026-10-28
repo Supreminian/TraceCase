@@ -193,5 +193,5 @@ def submit_initial(service, job_id):
 
 def initial_jobs(service):
     with service.connection() as db:
-        return [dict(r) for r in db.execute("SELECT id,run_id,status,error FROM generation_jobs WHERE workspace_id=? AND project_id=? AND kind='initial' ORDER BY created_at DESC LIMIT 5",
+        return [dict(r) for r in db.execute("SELECT id,run_id,status,error,created_at FROM generation_jobs WHERE workspace_id=? AND project_id=? AND kind='initial' ORDER BY created_at DESC LIMIT 5",
                                             (service.workspace_id, service.project_id))]

@@ -1,6 +1,7 @@
 """Shared presentation: accessible surfaces, workflow cues and module identities."""
 from html import escape
 from datetime import datetime
+import time
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -59,6 +60,27 @@ def apply_style():
     .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button):focus-visible {
       outline:2px solid #2563eb; outline-offset:2px; }
     .stApp [data-testid="stSidebar"] .st-key-workspace_navigation p { font-size:14px; font-weight:600; }
+    .tc-generation { background:linear-gradient(120deg,#fff,#eff5ff); border:1px solid #c7d9fa;
+      border-left:4px solid #2563eb; border-radius:14px; padding:22px 24px; margin:12px 0 22px; }
+    .tc-generation-top { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
+    .tc-generation-spinner { width:28px; height:28px; flex-shrink:0; border:3px solid #dbe7fc;
+      border-top-color:#2563eb; border-radius:50%; animation:tc-spin 1s linear infinite; }
+    .tc-generation h3 { font-size:18px!important; margin:0 0 5px; color:#18283e; }
+    .tc-generation p { margin:0; color:#63748b; font-size:13px; line-height:1.7; }
+    .tc-generation-stages { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+    .tc-generation-stage { padding:8px 12px; border:1px solid #e1e7ef; border-radius:8px;
+      font-size:12px; color:#63748b; background:#fff; }
+    .tc-generation-stage.done { color:#0f766e; background:#ecfdf5; border-color:#b9ddd3; }
+    .tc-generation-stage.active { color:#1d4ed8; background:#e8effd; border-color:#b9cdf8; font-weight:700; }
+    .tc-generation-time { font-size:12px; color:#1d4ed8; margin-bottom:7px; }
+    .tc-generation-track { height:3px; background:#dbe7fc; overflow:hidden; border-radius:99px; margin-top:18px; }
+    .tc-generation-track::after { content:""; display:block; width:35%; height:100%; background:#2563eb;
+      animation:tc-travel 2s ease-in-out infinite; border-radius:99px; }
+    @keyframes tc-spin { to { transform:rotate(360deg); } }
+    @keyframes tc-travel { from { transform:translateX(-110%); } to { transform:translateX(390%); } }
+    @media(prefers-reduced-motion:reduce) {
+      .tc-generation-spinner,.tc-generation-track::after { animation:none; }
+    }
     .tc-mode { --mode-accent:#0f766e; --mode-bg:#e8f5f1; --mode-line:#b9ddd3; }
     .tc-mode.personal { --mode-accent:#1d4ed8; --mode-bg:#eff6ff; --mode-line:#c7d9fa; }
     .tc-mode-banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px;
@@ -177,3 +199,22 @@ def workspace_mode(space, *, sidebar=False):
         detail = '共享项目与用例，按团队角色协作审核。' if team else '当前项目、用例和审核记录保存在你的个人空间。'
         html = f'<div class="tc-mode tc-mode-banner {kind}" role="status"><strong>{mode} · {name}</strong><span>{detail}</span></div>'
     st.markdown(html, unsafe_allow_html=True)
+
+
+def generation_activity(job, *, auto_open=False):
+    queued = job['status'] == 'queued'
+    title = '任务已提交，等待生成' if queued else 'AI 正在处理需求'
+    description = ('正在等待可用的生成资源，请勿重复提交。' if queued else
+                   '正在分析需求、生成测试用例并进行结果校验。需求不明确的部分会整理为澄清问题。')
+    created = job.get('created_at')
+    elapsed = max(0, int(time.time() - created)) if isinstance(created, (int, float)) else None
+    elapsed_text = (f'任务已用时 {elapsed // 60} 分 {elapsed % 60} 秒' if elapsed is not None else '任务正在后台运行')
+    stages = [('done', '✓ 需求已接收'), ('active', '等待开始' if queued else '分析、生成与校验'), ('', '下一步：人工审核')]
+    stage_html = ''.join(f'<span class="tc-generation-stage {state}">{label}</span>' for state, label in stages)
+    next_step = '完成后将自动打开本次结果。' if auto_open else '完成后可在当前项目中打开结果。'
+    st.markdown(f'<section class="tc-generation"><div role="status" aria-live="polite" aria-busy="true">'
+                f'<div class="tc-generation-top"><span class="tc-generation-spinner" aria-hidden="true"></span>'
+                f'<div><h3>{title}</h3><p>{description}</p></div></div></div>'
+                f'<div class="tc-generation-stages">{stage_html}</div><div class="tc-generation-time">{elapsed_text}</div>'
+                f'<p>复杂需求可能需要更长时间。你可以继续浏览项目，任务会在后台继续。{next_step}</p>'
+                '<div class="tc-generation-track" aria-hidden="true"></div></section>', unsafe_allow_html=True)

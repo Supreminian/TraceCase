@@ -17,7 +17,7 @@ from sdlc.service import ServiceError
 from sdlc.secure_service import Service
 from sdlc.account_ui import enter, download_link, space_navigation
 from sdlc import jobs
-from sdlc.ui import apply_style, page_header, section_title, workflow
+from sdlc.ui import apply_style, page_header, section_title, workflow, generation_activity
 from sdlc.project_ui import project_changed, projects_view, overview, project_cases, export_history, remember_draft, upload_changed
 
 
@@ -95,6 +95,7 @@ def new_run(service: Service, operator: str) -> None:
         provider = configured_provider()
     except ValueError:
         st.warning("生成服务暂不可用，请联系维护者检查连接。需求内容可先保留在本项目草稿中。")
+    generating = any(item['status'] in {'queued', 'running'} for item in jobs.initial_jobs(service))
     input_col, summary_col = st.columns([2.5, 1], gap="large")
     with input_col:
         with st.container(border=True, key="prd_input"):
@@ -124,8 +125,8 @@ def new_run(service: Service, operator: str) -> None:
                 st.info("正在基于上一轮需求创建新版本，原记录会保留。")
             preview_col, generate_col = st.columns([1, 2])
             preview = preview_col.button("预览需求", width="stretch")
-            generate = generate_col.button("生成测试用例", type="primary", key="generate", width="stretch",
-                                             disabled=not operator.strip() or provider is None)
+            generate = generate_col.button("正在生成，请稍候" if generating else "生成测试用例", type="primary", key="generate", width="stretch",
+                                             disabled=not operator.strip() or provider is None or generating)
             if not operator.strip():
                 st.caption("登录会话已失效，请重新登录。")
             st.caption("点击生成会将需求发送至已配置的 AI 服务；必要时自动修复一次，最多两次调用，可能消耗额度。请使用虚构或脱敏数据。")
@@ -683,9 +684,14 @@ def history(service: Service) -> None:
 def generation_status(service):
     try:
         records = jobs.initial_jobs(service)
+        state_key = '_initial_job_states_' + service.project_id
+        state = tuple((item['id'], item['status'], item['run_id']) for item in records)
+        previous = st.session_state.get(state_key)
+        st.session_state[state_key] = state
         for item in records:
             if item['status'] in {'queued', 'running'}:
-                st.info("正在后台分析 PRD 并生成测试用例，可继续浏览其他页面。")
+                generation_activity(item, auto_open=(st.session_state.get('_await_initial_job') == item['id']
+                                                      and st.session_state.get('page') == '新建运行'))
             elif item['run_id']:
                 if st.session_state.get('_await_initial_job') == item['id'] and st.session_state.get('page') == '新建运行':
                     st.session_state.pop('_await_initial_job', None)
@@ -698,7 +704,10 @@ def generation_status(service):
                     st.session_state['_navigate_to'] = PAGES[1]
                     st.rerun(scope='app')
             elif item['status'] == 'failed':
-                st.warning(item['error'] or '生成任务已中断，请重新提交。')
+                st.error(item['error'] or '生成任务已中断，请重新提交。')
+                st.caption('需求草稿已保留。请检查问题后重新提交，或联系维护者检查生成服务。')
+        if previous is not None and previous != state:
+            st.rerun(scope='app')
     except ValueError as exc:
         st.error(str(exc))
 

@@ -157,3 +157,35 @@ def test_clearing_project_hides_project_navigation(tmp_path, monkeypatch):
     assert not app.exception
     assert not any(widget.key == 'page' for widget in app.radio)
     assert app.title[0].value == '项目列表'
+
+
+def test_pending_generation_shows_activity_prevents_duplicates_and_recovers(tmp_path, monkeypatch):
+    from sdlc import jobs
+    from tests.fixture_provider import list_samples
+    path = tmp_path / 'pending-generation.sqlite3'
+    project = Service(path).create_project('生成状态项目', '', 'tester')
+    app = app_for(path, monkeypatch)
+    app.selectbox(key='current_project').select(project).run()
+    app.radio(key='page').set_value('新建运行').run()
+    text = list_samples()[0]['text']
+    app.text_area(key='prd_text').input(text).run()
+    monkeypatch.setattr(jobs, 'submit_initial', lambda service, job: None)
+    app.button(key='generate').click().run()
+    assert not app.exception
+    assert app.button(key='generate').disabled
+    assert any('任务已提交，等待生成' in item.value for item in app.markdown)
+    import sqlite3
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM generation_jobs WHERE kind='initial'").fetchone()[0] == 1
+        db.execute("UPDATE generation_jobs SET status='running' WHERE kind='initial'")
+    app.run()
+    assert any('AI 正在处理需求' in item.value for item in app.markdown)
+    assert app.button(key='generate').disabled
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE generation_jobs SET status='failed', error='测试生成服务超时' WHERE kind='initial'")
+    app.run()
+    assert not app.exception
+    assert not app.button(key='generate').disabled
+    assert any('测试生成服务超时' in item.value for item in app.error)
+    assert app.text_area(key='prd_text').value == text
+    assert not any('class="tc-generation"' in item.value for item in app.markdown)
