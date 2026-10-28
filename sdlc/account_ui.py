@@ -68,7 +68,8 @@ def enter(path):
         st.session_state['_space_archived'] = bool(chosen['archived'])
         with st.sidebar:
             workspace_mode(chosen, sidebar=True)
-            st.caption(user['display_name'] + ' · ' + ('个人工作' if chosen['kind'] == 'personal' else ROLE_NAMES[chosen['role']]))
+            if chosen['kind'] == 'team':
+                st.caption('当前角色：' + ROLE_NAMES[chosen['role']])
         workspace_mode(chosen)
         if chosen['kind'] == 'team' and st.session_state.get('show_team_management'):
             with st.sidebar:

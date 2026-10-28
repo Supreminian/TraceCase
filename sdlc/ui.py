@@ -86,10 +86,9 @@ def apply_style():
     .tc-mode-banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px;
       border:1px solid var(--mode-line); border-left:4px solid var(--mode-accent);
       background:var(--mode-bg); padding:12px 18px; margin-bottom:18px; border-radius:10px; }
-    .tc-mode-banner strong,.tc-mode-label { color:var(--mode-accent); font-size:14px; font-weight:750; }
+    .tc-mode-banner strong { color:var(--mode-accent); font-size:14px; font-weight:750; }
     .tc-mode-banner span { color:var(--tc-muted); font-size:12px; }
-    .tc-mode-sidebar { border:1px solid var(--mode-line); background:var(--mode-bg); border-radius:10px; padding:12px; }
-    .tc-mode-sidebar strong { display:block; margin-top:5px; color:var(--tc-ink); overflow-wrap:anywhere; }
+    .tc-space-name { color:var(--tc-ink); font-weight:700; overflow-wrap:anywhere; margin-bottom:8px; }
     [data-testid="stVerticalBlockBorderWrapper"] { border-color:var(--tc-line)!important; border-radius:14px; }
     [data-testid="stForm"] { background:white; border:1px solid var(--tc-line); border-radius:14px; padding:20px; }
     [data-testid="stMetric"] { background:#fff; border:1px solid var(--tc-line); border-radius:12px; padding:16px 18px; }
@@ -199,7 +198,7 @@ def workspace_mode(space, *, sidebar=False):
     kind = 'team' if team else 'personal'
     name = escape(space['name'] if team else '我的个人空间')
     if sidebar:
-        html = f'<div class="tc-mode tc-mode-sidebar {kind}"><span class="tc-mode-label">{mode}</span><strong>{name}</strong></div>'
+        html = f'<div class="tc-space-name">{name}</div>'
     else:
         detail = '共享项目与用例，按团队角色协作审核。' if team else '当前项目、用例和审核记录保存在你的个人空间。'
         html = f'<div class="tc-mode tc-mode-banner {kind}" role="status"><strong>{mode} · {name}</strong><span>{detail}</span></div>'
