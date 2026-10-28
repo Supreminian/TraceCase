@@ -23,6 +23,9 @@ def apply_style():
     h2 { font-size:1.35rem!important; } h3 { font-size:1.1rem!important; }
     [data-testid="stCaptionContainer"] { color:var(--tc-muted); line-height:1.65; }
     [data-testid="stSidebar"] { background:#edf1f7; border-right:1px solid var(--tc-line); }
+    /* Navigation keeps keyboard/radio semantics, without form-control circles. */
+    .st-key-page [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) { display:none; }
+    .st-key-page [data-testid="stRadioOption"] > div { gap:0; }
     [data-testid="stSidebar"] [role="radiogroup"] { gap:5px; }
     [data-testid="stSidebar"] [role="radiogroup"] > div { width:100%; }
     [data-testid="stSidebar"] [role="radiogroup"] label {
@@ -53,7 +56,7 @@ def apply_style():
     .st-key-header_workspace { border-left:5px solid #334155; }
     .st-key-header_export { border-left:5px solid #7c3aed; }
     .st-key-header_analysis { border-left:5px solid #4f46e5; }
-    .st-key-prd_input,.st-key-generation_summary,[class*="st-key-case_body_"],
+    .st-key-project_empty,.st-key-project_create_action,.st-key-prd_input,.st-key-generation_summary,[class*="st-key-case_body_"],
     [class*="st-key-case_source_panel_"],[class*="st-key-review_actions_"],
     [class*="st-key-extraction_"],.st-key-export_workspace,.st-key-clarification_workspace,.st-key-review_result_workspace { background:#fff; padding:22px; border-radius:14px; }
     .st-key-prd_input { border-top:3px solid #2563eb!important; }
@@ -85,9 +88,11 @@ def apply_style():
       h1 { font-size:1.65rem!important; }
       .tc-step { padding:9px 7px; font-size:11px; } .tc-step b { display:block; }
       .stTabs [data-baseweb="tab"] { padding:8px 10px; }
+      [data-testid="stHorizontalBlock"]:has(.st-key-project_create_action),
       [data-testid="stHorizontalBlock"]:has(.st-key-prd_input),
       [data-testid="stHorizontalBlock"]:has([class*="st-key-case_body_"]),
       [data-testid="stHorizontalBlock"]:has(.st-key-extraction_features) { flex-wrap:wrap; }
+      [data-testid="stHorizontalBlock"]:has(.st-key-project_create_action) > [data-testid="stColumn"],
       [data-testid="stHorizontalBlock"]:has(.st-key-prd_input) > [data-testid="stColumn"],
       [data-testid="stHorizontalBlock"]:has([class*="st-key-case_body_"]) > [data-testid="stColumn"],
       [data-testid="stHorizontalBlock"]:has(.st-key-extraction_features) > [data-testid="stColumn"] {

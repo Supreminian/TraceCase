@@ -59,9 +59,7 @@ def project_page_selected():
     st.session_state.pop('manage_project', None)
 
 
-def projects_view(admin, operator):
-    page_header('项目列表', '按项目组织需求、用例与审核记录，从这里开始新的测试工作。', 'workspace', '项目管理')
-    section_title('创建项目', '为一组独立需求建立专属工作空间。', 'workspace')
+def project_form(admin, operator):
     if not operator.strip():
         st.caption('登录会话已失效，请重新登录后操作。')
     with st.form('create_project'):
@@ -71,65 +69,95 @@ def projects_view(admin, operator):
     if submitted:
         try:
             project_id = admin.create_project(name, description, operator)
+            st.session_state.pop("_create_project_workspace", None)
             open_project(project_id)
         except (ServiceError, ValueError) as error:
             st.error(str(error))
-    section_title('已有项目', '进入项目查看生成进度、用例和批准快照。', 'workspace')
+
+
+def close_project_dialog():
+    st.session_state.pop('_create_project_workspace', None)
+
+
+@st.dialog('创建新项目', on_dismiss=close_project_dialog)
+def create_project_dialog(admin, operator):
+    st.caption('为独立需求建立专属项目，生成与审核记录会保存在该项目中。')
+    project_form(admin, operator)
+
+
+def projects_view(admin, operator):
+    page_header('项目列表', '按项目组织需求、用例与审核记录，从这里开始新的测试工作。', 'workspace', '项目管理')
     total = admin.count_projects()
-    pages = max(1, (total + PROJECTS_PER_PAGE - 1) // PROJECTS_PER_PAGE)
-    page = min(max(1, st.session_state.get('projects_page', 1)), pages)
-    st.session_state['projects_page'] = page
-    projects = admin.list_projects(limit=PROJECTS_PER_PAGE, offset=(page - 1) * PROJECTS_PER_PAGE)
-    st.caption(f'共 {total} 个项目；归档项目也保留在列表中。')
-    if not projects:
-        st.info('此空间还没有项目。有生成权限的成员可新建项目，再输入需求生成测试用例。')
+    if not total:
+        with st.container(key='project_empty', border=True):
+            section_title('创建第一个项目', '此空间还没有项目。先创建项目，再输入 PRD 生成测试用例。', 'workspace')
+            project_form(admin, operator)
         return
-    for p in projects:
-        with st.container(border=True):
-            st.text(p['name'])
-            st.text(f"{'已归档' if p['status'] == 'archived' else '进行中'} · {p['run_count']} 个批次")
-            st.text(p['description'])
-            if st.button('进入项目', key=f"enter_project_{p['id']}"):
-                open_project(p['id'])
-    with st.expander('项目设置与归档', expanded=False):
-        selected = st.selectbox('管理项目', [p['id'] for p in projects],
-                                format_func=lambda pid: next(p['name'] for p in projects if p['id'] == pid),
-                                key='manage_project')
-        project = admin.get_project(selected)
-        if project['status'] == 'active':
-            with st.form(f"edit_project_{selected}_{project['revision']}"):
-                name = st.text_input('修改项目名称', value=project['name'], max_chars=80)
-                description = st.text_area('修改项目简介', value=project['description'], max_chars=500)
-                submitted = st.form_submit_button('保存项目信息', disabled=not operator.strip() or 'edit' not in admin.user['permissions'])
-            if submitted:
+    project_list, project_actions = st.columns([3, 1], gap='large')
+    with project_actions:
+        with st.container(key='project_create_action', border=True):
+            section_title('创建新项目', '为新的需求建立独立项目。', 'input')
+            if st.button('创建新项目', key='open_create_project', type='primary', width='stretch',
+                         disabled=not operator.strip() or 'generate' not in admin.user['permissions']):
+                st.session_state['_create_project_workspace'] = admin.workspace_id
+            if st.session_state.get('_create_project_workspace') == admin.workspace_id:
+                create_project_dialog(admin, operator)
+    with project_list:
+        section_title('已有项目', '进入项目查看生成进度、用例和批准快照。', 'workspace')
+        pages = max(1, (total + PROJECTS_PER_PAGE - 1) // PROJECTS_PER_PAGE)
+        page = min(max(1, st.session_state.get('projects_page', 1)), pages)
+        st.session_state['projects_page'] = page
+        projects = admin.list_projects(limit=PROJECTS_PER_PAGE, offset=(page - 1) * PROJECTS_PER_PAGE)
+        st.caption(f'共 {total} 个项目；归档项目也保留在列表中。')
+        if not projects:
+            st.info('此空间还没有项目。有生成权限的成员可新建项目，再输入需求生成测试用例。')
+            return
+        for p in projects:
+            with st.container(border=True):
+                st.text(p['name'])
+                st.text(f"{'已归档' if p['status'] == 'archived' else '进行中'} · {p['run_count']} 个批次")
+                st.text(p['description'])
+                if st.button('进入项目', key=f"enter_project_{p['id']}"):
+                    open_project(p['id'])
+        with st.expander('项目设置与归档', expanded=False):
+            selected = st.selectbox('管理项目', [p['id'] for p in projects],
+                                    format_func=lambda pid: next(p['name'] for p in projects if p['id'] == pid),
+                                    key='manage_project')
+            project = admin.get_project(selected)
+            if project['status'] == 'active':
+                with st.form(f"edit_project_{selected}_{project['revision']}"):
+                    name = st.text_input('修改项目名称', value=project['name'], max_chars=80)
+                    description = st.text_area('修改项目简介', value=project['description'], max_chars=500)
+                    submitted = st.form_submit_button('保存项目信息', disabled=not operator.strip() or 'edit' not in admin.user['permissions'])
+                if submitted:
+                    try:
+                        admin.update_project(selected, name, description, operator, project['revision'])
+                        st.session_state['_notice'] = '项目信息已保存，历史快照内容不变。'
+                        st.rerun()
+                    except (ServiceError, ValueError) as error:
+                        st.error(str(error))
+            if st.button('恢复项目' if project['status'] == 'archived' else '归档项目', key='archive_project',
+                         disabled=not operator.strip() or 'manage' not in admin.user['permissions']):
                 try:
-                    admin.update_project(selected, name, description, operator, project['revision'])
-                    st.session_state['_notice'] = '项目信息已保存，历史快照内容不变。'
+                    admin.set_project_archived(selected, project['status'] != 'archived', operator, project['revision'])
+                    st.session_state['_notice'] = '项目状态已更新。归档项目可查阅和下载已有快照。'
                     st.rerun()
                 except (ServiceError, ValueError) as error:
                     st.error(str(error))
-        if st.button('恢复项目' if project['status'] == 'archived' else '归档项目', key='archive_project',
-                     disabled=not operator.strip() or 'manage' not in admin.user['permissions']):
-            try:
-                admin.set_project_archived(selected, project['status'] != 'archived', operator, project['revision'])
-                st.session_state['_notice'] = '项目状态已更新。归档项目可查阅和下载已有快照。'
-                st.rerun()
-            except (ServiceError, ValueError) as error:
-                st.error(str(error))
-        with st.expander('项目维护记录'):
-            st.json(project['events'])
+            with st.expander('项目维护记录'):
+                st.json(project['events'])
 
-    if total > PROJECTS_PER_PAGE:
-        st.divider()
-        previous, selector, following = st.columns([1, 2, 1])
-        previous.button('上一页', key='projects_previous', disabled=page == 1,
-                        on_click=change_project_page, args=(page - 1,), width='stretch')
-        selector.selectbox('切换项目页面', list(range(1, pages + 1)), key='projects_page',
-                           format_func=lambda number: f'第 {number} 页 / 共 {pages} 页',
-                           label_visibility='collapsed', on_change=project_page_selected)
-        following.button('下一页', key='projects_next', disabled=page == pages,
-                         on_click=change_project_page, args=(page + 1,), width='stretch')
-        st.caption(f'显示第 {(page - 1) * PROJECTS_PER_PAGE + 1}–{min(page * PROJECTS_PER_PAGE, total)} 个项目，每页 {PROJECTS_PER_PAGE} 个。')
+        if total > PROJECTS_PER_PAGE:
+            st.divider()
+            previous, selector, following = st.columns([1, 2, 1])
+            previous.button('上一页', key='projects_previous', disabled=page == 1,
+                            on_click=change_project_page, args=(page - 1,), width='stretch')
+            selector.selectbox('切换项目页面', list(range(1, pages + 1)), key='projects_page',
+                               format_func=lambda number: f'第 {number} 页 / 共 {pages} 页',
+                               label_visibility='collapsed', on_change=project_page_selected)
+            following.button('下一页', key='projects_next', disabled=page == pages,
+                             on_click=change_project_page, args=(page + 1,), width='stretch')
+            st.caption(f'显示第 {(page - 1) * PROJECTS_PER_PAGE + 1}–{min(page * PROJECTS_PER_PAGE, total)} 个项目，每页 {PROJECTS_PER_PAGE} 个。')
 
 
 def overview(service, go_to):

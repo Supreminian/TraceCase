@@ -33,6 +33,23 @@ def test_first_project_creation_and_empty_workspace(tmp_path, monkeypatch):
     assert app.radio(key='page').value == '新建运行'
 
 
+def test_existing_projects_show_cards_and_create_on_demand(tmp_path, monkeypatch):
+    path = tmp_path / 'existing-projects.sqlite3'
+    admin = Service(path)
+    existing = admin.create_project('已有项目', '', 'tester')
+    app = app_for(path, monkeypatch)
+    assert app.button(key=f'enter_project_{existing}')
+    assert not any(field.key == 'new_project_name' for field in app.text_input)
+    app.button(key='open_create_project').click().run()
+    assert not app.exception
+    app.text_input(key='new_project_name').input('第二个项目')
+    next(button for button in app.button if button.label == '新建项目').click().run()
+    assert not app.exception
+    assert app.radio(key='page').value == '项目概览'
+    assert admin.get_project(app.selectbox(key='current_project').value)['name'] == '第二个项目'
+    assert len(admin.list_projects()) == 2
+
+
 def test_switching_projects_keeps_drafts_and_clears_review_download_context(tmp_path, monkeypatch):
     path = tmp_path / 'ui.sqlite3'
     admin = Service(path)
