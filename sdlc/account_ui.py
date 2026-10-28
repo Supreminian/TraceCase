@@ -2,7 +2,7 @@
 import streamlit as st
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, ROLE_NAMES, ROLES, OVERRIDES, logout_proof
-from sdlc.ui import page_header, section_title
+from sdlc.ui import page_header, section_title, workspace_mode
 
 PERMISSION_NAMES = {'generate': '创建项目与生成', 'edit': '人工编辑', 'review': '审核与澄清',
                     'regenerate': '退回用例重新生成', 'export': '批准导出与下载'}
@@ -64,18 +64,21 @@ def enter(path):
         st.session_state['_rendered_workspace'] = current
         st.session_state['_space_archived'] = bool(chosen['archived'])
         with st.sidebar:
+            workspace_mode(chosen, sidebar=True)
             st.caption(user['display_name'] + ' · ' + ('个人工作' if chosen['kind'] == 'personal' else ROLE_NAMES[chosen['role']]))
-            st.markdown('**' + chosen['name'].replace('*', '') + '**')
-            if st.button('切换个人 / 团队空间'):
-                st.session_state.pop('active_workspace', None)
-                reset_space()
-                st.rerun()
-            if chosen['kind'] == 'team':
-                team_navigation()
-            st.link_button('登录账号与绑定', '/auth/account')
-            if user.get('password_login', True):
-                st.link_button('修改密码', '/auth/password')
-            logout_control(token)
+            st.caption('团队功能' if chosen['kind'] == 'team' else '空间功能')
+            with st.container(key='workspace_navigation'):
+                if st.button('切换个人 / 团队空间', width='stretch'):
+                    st.session_state.pop('active_workspace', None)
+                    reset_space()
+                    st.rerun()
+                if chosen['kind'] == 'team':
+                    team_navigation()
+                st.link_button('登录账号与绑定', '/auth/account', width='stretch')
+                if user.get('password_login', True):
+                    st.link_button('修改密码', '/auth/password', width='stretch')
+                logout_control(token)
+        workspace_mode(chosen)
         if chosen['kind'] == 'team' and st.session_state.get('show_team_management'):
             # Retain navigation widgets while the management page hides project controls.
             for key in ('current_project', 'page'):

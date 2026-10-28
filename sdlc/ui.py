@@ -34,6 +34,32 @@ def apply_style():
     [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
       background:#1e3455; color:#fff; }
     [data-testid="stSidebar"] [role="radiogroup"] label:has(input:focus-visible) { outline:2px solid #2563eb; }
+    .st-key-page [data-testid="stRadioOption"] p { font-size:14px; font-weight:600; }
+    /* Account/team actions and project choices use the same navigation treatment. */
+    .st-key-workspace_navigation { gap:5px; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a) > div {
+      justify-content:flex-start; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button) {
+      display:flex; justify-content:flex-start; width:100%; min-height:44px;
+      padding:10px 12px; border:0; border-radius:10px; background:transparent;
+      color:var(--tc-ink); box-shadow:none; font-size:14px; font-weight:600; text-align:left; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button):hover {
+      background:#e1e8f2; color:var(--tc-ink); border:0; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation [data-testid="stBaseButton-primary"],
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation [data-testid="stBaseButton-primary"]:hover {
+      background:#1e3455; color:white; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button):focus-visible {
+      outline:2px solid #2563eb; outline-offset:2px; }
+    .stApp [data-testid="stSidebar"] .st-key-workspace_navigation p { font-size:14px; font-weight:600; }
+    .tc-mode { --mode-accent:#0f766e; --mode-bg:#e8f5f1; --mode-line:#b9ddd3; }
+    .tc-mode.personal { --mode-accent:#1d4ed8; --mode-bg:#eff6ff; --mode-line:#c7d9fa; }
+    .tc-mode-banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px;
+      border:1px solid var(--mode-line); border-left:4px solid var(--mode-accent);
+      background:var(--mode-bg); padding:12px 18px; margin-bottom:18px; border-radius:10px; }
+    .tc-mode-banner strong,.tc-mode-label { color:var(--mode-accent); font-size:14px; font-weight:750; }
+    .tc-mode-banner span { color:var(--tc-muted); font-size:12px; }
+    .tc-mode-sidebar { border:1px solid var(--mode-line); background:var(--mode-bg); border-radius:10px; padding:12px; }
+    .tc-mode-sidebar strong { display:block; margin-top:5px; color:var(--tc-ink); overflow-wrap:anywhere; }
     [data-testid="stVerticalBlockBorderWrapper"] { border-color:var(--tc-line)!important; border-radius:14px; }
     [data-testid="stForm"] { background:white; border:1px solid var(--tc-line); border-radius:14px; padding:20px; }
     [data-testid="stMetric"] { background:#fff; border:1px solid var(--tc-line); border-radius:12px; padding:16px 18px; }
@@ -130,3 +156,16 @@ def format_time(value):
             ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')
     except (ValueError, TypeError, AttributeError):
         return '时间未记录'
+
+
+def workspace_mode(space, *, sidebar=False):
+    team = space['kind'] == 'team'
+    mode = '团队协作' if team else '个人工作'
+    kind = 'team' if team else 'personal'
+    name = escape(space['name'] if team else '我的个人空间')
+    if sidebar:
+        html = f'<div class="tc-mode tc-mode-sidebar {kind}"><span class="tc-mode-label">{mode}</span><strong>{name}</strong></div>'
+    else:
+        detail = '共享项目与用例，按团队角色协作审核。' if team else '当前项目、用例和审核记录保存在你的个人空间。'
+        html = f'<div class="tc-mode tc-mode-banner {kind}" role="status"><strong>{mode} · {name}</strong><span>{detail}</span></div>'
+    st.markdown(html, unsafe_allow_html=True)
