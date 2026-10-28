@@ -1,11 +1,20 @@
 """Account/workspace navigation, separate from extracted PRD business roles."""
 import streamlit as st
 
-from sdlc.accounts import Accounts, AccessError, COOKIE, ROLE_NAMES, ROLES, OVERRIDES
+from sdlc.accounts import Accounts, AccessError, COOKIE, ROLE_NAMES, ROLES, OVERRIDES, logout_proof
 from sdlc.ui import page_header, section_title
 
 PERMISSION_NAMES = {'generate': '创建项目与生成', 'edit': '人工编辑', 'review': '审核与澄清',
                     'regenerate': '退回用例重新生成', 'export': '批准导出与下载'}
+
+
+def logout_control(token):
+    # Native same-tab POST: one click, no intermediate page and no JavaScript credential access.
+    proof = logout_proof(token)
+    st.html('<form method="post" action="/auth/logout" target="_self">'
+            '<input type="hidden" name="logout_proof" value="' + proof + '">'
+            '<button type="submit" style="font:inherit;padding:8px 14px;border:1px solid #cbd5e1;'
+            'border-radius:8px;background:white;color:#18283e;cursor:pointer">退出登录</button></form>')
 
 
 def reset_space():
@@ -35,7 +44,7 @@ def enter(path):
     except AccessError:
         st.session_state.clear()
         page_header('欢迎使用 TraceCase', '请先登录，再进入自己的个人空间或团队。', 'workspace', '账号')
-        st.link_button('登录 / 注册', '/auth/login', type='primary')
+        st.html('<a href="/auth/login" target="_self">登录 / 注册</a>')
         st.stop()
     if st.session_state.get('auth_user') != user['id']:
         st.session_state.clear()
@@ -67,7 +76,7 @@ def enter(path):
             st.link_button('登录账号与绑定', '/auth/account')
             if user.get('password_login', True):
                 st.link_button('修改密码', '/auth/password')
-            st.link_button('退出登录', '/auth/logout')
+            logout_control(token)
         if st.session_state.get('show_team_management'):
             team_management(store, token, chosen)
             st.stop()
@@ -124,7 +133,7 @@ def enter(path):
         status = {'pending': '待管理员审核', 'approved': '已批准，可进入团队', 'rejected': '已拒绝'}[item['status']]
         st.info(item['name'] + ' · ' + status + (' · ' + item['reason'] if item['reason'] else ''))
     st.caption('升级前尚无账号归属的项目由本机维护者明确分配，不会自动归入新注册账号。')
-    st.link_button('退出登录', '/auth/logout')
+    logout_control(token)
     st.stop()
 
 

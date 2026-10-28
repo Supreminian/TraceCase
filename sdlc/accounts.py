@@ -1,6 +1,7 @@
 """Server-side identities, expiring sessions and transaction-bound workspace authorization."""
 from contextlib import contextmanager
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
@@ -95,6 +96,23 @@ CREATE TRIGGER IF NOT EXISTS immutable_account_events_delete BEFORE DELETE ON ac
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _session_proof(token, purpose):
+    if not isinstance(token, str) or not 1 <= len(token) <= 128:
+        return ''
+    return hmac.new(token.encode(), purpose, hashlib.sha256).hexdigest()
+
+
+def logout_proof(token):
+    """Action-specific CSRF proof, never accepted as a login credential."""
+    return _session_proof(token, b'tracecase:logout')
+
+
+def session_marker(token):
+    """Public page marker for detecting session rotation; cannot authenticate or log out."""
+    return _session_proof(token, b'tracecase:page-session')
+
 
 
 def uid():
@@ -256,6 +274,7 @@ class Accounts:
 
     def logout(self, token):
         with self.db(write=True) as db:
+            db.execute('DELETE FROM oauth_flows WHERE previous_session_hash=?', (digest(token or ''),))
             db.execute('DELETE FROM sessions WHERE token_hash=?', (digest(token or ''),))
 
     def change_password(self, token, old_password, new_password):
