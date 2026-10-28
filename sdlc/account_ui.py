@@ -13,8 +13,7 @@ def logout_control(token):
     proof = logout_proof(token)
     st.html('<form method="post" action="/auth/logout" target="_self">'
             '<input type="hidden" name="logout_proof" value="' + proof + '">'
-            '<button type="submit" style="font:inherit;padding:8px 14px;border:1px solid #cbd5e1;'
-            'border-radius:8px;background:white;color:#18283e;cursor:pointer">退出登录</button></form>')
+            '<button type="submit" class="tc-logout-button">退出登录</button></form>')
 
 
 def reset_space():
