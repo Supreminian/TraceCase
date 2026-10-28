@@ -9,7 +9,7 @@ from sdlc.accounts import Accounts, AccessError
 from sdlc.service import Service as Engine, ServiceError, identifier, now, dumps
 
 CAPABILITIES = {
-    'list_projects': 'view', 'get_project': 'view', 'project_stats': 'view',
+    'list_projects': 'view', 'count_projects': 'view', 'get_project': 'view', 'project_stats': 'view',
     'list_runs': 'view', 'list_run_summaries': 'view', 'get_run': 'view', 'gate': 'view',
     'create_project': 'generate', 'update_project': 'edit', 'set_project_archived': 'manage',
     'generate': 'generate', 'generate_from_prd': 'generate', 'repair_validation': 'generate',
@@ -92,6 +92,11 @@ class Service(Engine):
                 FROM projects p JOIN project_workspaces pw ON pw.project_id=p.id
                 WHERE pw.workspace_id=? ORDER BY p.created_at DESC,p.id LIMIT ? OFFSET ?''',
                 (self.workspace_id, limit, offset))]
+
+    def count_projects(self):
+        with self.connection() as db:
+            return db.execute('SELECT COUNT(*) FROM project_workspaces WHERE workspace_id=?',
+                              (self.workspace_id,)).fetchone()[0]
 
     def create_project(self, name, description, operator=None):
         name, description = self._project_fields(name, description)

@@ -102,3 +102,27 @@ def test_project_case_navigation_export_and_archive(tmp_path, monkeypatch):
     app.radio(key='page').set_value('项目列表').run()
     app.button(key='archive_project').click().run()
     assert service.get_project()['status'] == 'active'
+
+
+def test_project_pagination_appears_only_over_page_limit_and_switches_pages(tmp_path, monkeypatch):
+    path = tmp_path / 'pagination.sqlite3'
+    admin = Service(path)
+    for index in range(25):
+        admin.create_project(f'项目 {index + 1}', '', 'tester')
+    app = app_for(path, monkeypatch)
+    assert not any(widget.key == 'projects_page' for widget in app.selectbox)
+    assert not any(widget.label == '项目列表页码' for widget in app.number_input)
+    assert len([b for b in app.button if (b.key or '').startswith('enter_project_')]) == 25
+    admin.create_project('项目 26', '', 'tester')
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key='projects_page').options == ['第 1 页 / 共 2 页', '第 2 页 / 共 2 页']
+    assert app.button(key='projects_previous').disabled
+    app.button(key='projects_next').click().run()
+    assert not app.exception
+    assert app.selectbox(key='projects_page').value == 2
+    assert app.button(key='projects_next').disabled
+    assert len([b for b in app.button if (b.key or '').startswith('enter_project_')]) == 1
+    app.selectbox(key='projects_page').select(1).run()
+    assert not app.exception
+    assert len([b for b in app.button if (b.key or '').startswith('enter_project_')]) == 25

@@ -47,6 +47,18 @@ def open_project(project_id):
     st.rerun()
 
 
+PROJECTS_PER_PAGE = 25
+
+
+def change_project_page(page):
+    st.session_state['projects_page'] = page
+    st.session_state.pop('manage_project', None)
+
+
+def project_page_selected():
+    st.session_state.pop('manage_project', None)
+
+
 def projects_view(admin, operator):
     page_header('项目列表', '按项目组织需求、用例与审核记录，从这里开始新的测试工作。', 'workspace', '项目管理')
     section_title('创建项目', '为一组独立需求建立专属工作空间。', 'workspace')
@@ -63,9 +75,12 @@ def projects_view(admin, operator):
         except (ServiceError, ValueError) as error:
             st.error(str(error))
     section_title('已有项目', '进入项目查看生成进度、用例和批准快照。', 'workspace')
-    page = st.number_input('项目列表页码', min_value=1, value=1, step=1, key='projects_page')
-    projects = admin.list_projects(limit=25, offset=(page - 1) * 25)
-    st.caption('每页最多 25 个项目；归档项目也保留在列表中。')
+    total = admin.count_projects()
+    pages = max(1, (total + PROJECTS_PER_PAGE - 1) // PROJECTS_PER_PAGE)
+    page = min(max(1, st.session_state.get('projects_page', 1)), pages)
+    st.session_state['projects_page'] = page
+    projects = admin.list_projects(limit=PROJECTS_PER_PAGE, offset=(page - 1) * PROJECTS_PER_PAGE)
+    st.caption(f'共 {total} 个项目；归档项目也保留在列表中。')
     if not projects:
         st.info('此空间还没有项目。有生成权限的成员可新建项目，再输入需求生成测试用例。')
         return
@@ -103,6 +118,18 @@ def projects_view(admin, operator):
                 st.error(str(error))
         with st.expander('项目维护记录'):
             st.json(project['events'])
+
+    if total > PROJECTS_PER_PAGE:
+        st.divider()
+        previous, selector, following = st.columns([1, 2, 1])
+        previous.button('上一页', key='projects_previous', disabled=page == 1,
+                        on_click=change_project_page, args=(page - 1,), width='stretch')
+        selector.selectbox('切换项目页面', list(range(1, pages + 1)), key='projects_page',
+                           format_func=lambda number: f'第 {number} 页 / 共 {pages} 页',
+                           label_visibility='collapsed', on_change=project_page_selected)
+        following.button('下一页', key='projects_next', disabled=page == pages,
+                         on_click=change_project_page, args=(page + 1,), width='stretch')
+        st.caption(f'显示第 {(page - 1) * PROJECTS_PER_PAGE + 1}–{min(page * PROJECTS_PER_PAGE, total)} 个项目，每页 {PROJECTS_PER_PAGE} 个。')
 
 
 def overview(service, go_to):
