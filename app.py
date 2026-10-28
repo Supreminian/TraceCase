@@ -15,7 +15,7 @@ from sdlc.domain import coverage_report, prepare_input, validate_output
 from sdlc.providers import configured_provider
 from sdlc.service import ServiceError
 from sdlc.secure_service import Service
-from sdlc.account_ui import enter, download_link
+from sdlc.account_ui import enter, download_link, space_navigation
 from sdlc import jobs
 from sdlc.ui import apply_style, page_header, section_title, workflow
 from sdlc.project_ui import project_changed, projects_view, overview, project_cases, export_history, remember_draft, upload_changed
@@ -790,6 +790,7 @@ def main() -> None:
             st.divider()
             operator = user['id']
             st.caption("操作记录关联当前登录账号。")
+            space_navigation(user, token, admin.user)
         if "_notice" in st.session_state:
             st.success(st.session_state.pop("_notice"))
         if page == "项目列表" or not project_id:

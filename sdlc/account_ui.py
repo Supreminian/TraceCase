@@ -66,9 +66,11 @@ def enter(path):
         with st.sidebar:
             workspace_mode(chosen, sidebar=True)
             st.caption(user['display_name'] + ' · ' + ('个人工作' if chosen['kind'] == 'personal' else ROLE_NAMES[chosen['role']]))
-            space_navigation(user, token, chosen)
         workspace_mode(chosen)
         if chosen['kind'] == 'team' and st.session_state.get('show_team_management'):
+            with st.sidebar:
+                st.divider()
+                space_navigation(user, token, chosen)
             # Retain navigation widgets while the management page hides project controls.
             for key in ('current_project', 'page'):
                 if key in st.session_state:
@@ -78,6 +80,7 @@ def enter(path):
         return token, current, user
     with st.sidebar:
         st.caption(user['display_name'])
+        st.divider()
         space_navigation(user, token)
     workspace_picker(store, token, spaces)
     for item in store.applications(token):
