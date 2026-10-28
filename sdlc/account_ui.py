@@ -80,60 +80,108 @@ def enter(path):
             team_management(store, token, chosen)
             st.stop()
         return token, current, user
-    page_header('选择工作方式', '个人工作独立保存；团队协作共享项目，由管理员分配权限。', 'workspace', '工作空间')
-    left, right = st.columns(2, gap='large')
-    with left, st.container(border=True):
-        section_title('个人工作', '生成 → 逐条审核 → 定向修订 → 批准导出', 'review')
-        if st.button('进入我的个人空间', type='primary', width='stretch'):
-            st.session_state['active_workspace'] = next(s['id'] for s in spaces if s['kind'] == 'personal')
-            store.choose_space(token, st.session_state['active_workspace'])
-            reset_space()
-            st.rerun()
-    with right, st.container(border=True):
-        section_title('团队协作', '共享需求与用例，用预设角色协同审核。', 'analysis')
-        for space in spaces:
-            if space['kind'] == 'team' and st.button(space['name'] + ' · ' + ROLE_NAMES[space['role']], key='space_' + space['id']):
-                st.session_state['active_workspace'] = space['id']
-                store.choose_space(token, space['id'])
-                reset_space()
-                st.rerun()
-        choice = st.radio('团队入口', ['创建团队', '加入团队'], horizontal=True)
-        if choice == '创建团队':
-            with st.form('create_team'):
-                name = st.text_input('团队名称', max_chars=80)
-                description = st.text_area('团队简介（可选）', max_chars=500)
-                if st.form_submit_button('创建团队并进入'):
-                    try:
-                        st.session_state['active_workspace'] = store.create_team(token, name, description)
-                        store.choose_space(token, st.session_state['active_workspace'])
-                        reset_space()
-                        st.rerun()
-                    except AccessError as exc:
-                        st.error(str(exc))
-        else:
-            code = st.text_input('邀请码', max_chars=128, type='password')
-            note = st.text_input('申请说明（可选）', max_chars=1000)
-            if st.button('核对邀请的团队'):
-                try:
-                    result = store.request_join(token, code)
-                    st.session_state['join_preview'] = {'code': code, **result}
-                except AccessError as exc:
-                    st.error(str(exc))
-            preview = st.session_state.get('join_preview')
-            if preview and preview['code'] == code:
-                st.info('申请加入：' + preview['name'] + '。管理员审核通过后才可访问团队数据。')
-                if st.button('确认提交加入申请'):
-                    try:
-                        store.request_join(token, code, note, confirm=True)
-                        st.success('申请已提交，请等待管理员审核。')
-                    except AccessError as exc:
-                        st.error(str(exc))
+    workspace_picker(store, token, spaces)
     for item in store.applications(token):
         status = {'pending': '待管理员审核', 'approved': '已批准，可进入团队', 'rejected': '已拒绝'}[item['status']]
         st.info(item['name'] + ' · ' + status + (' · ' + item['reason'] if item['reason'] else ''))
     st.caption('升级前尚无账号归属的项目由本机维护者明确分配，不会自动归入新注册账号。')
     logout_control(token)
     st.stop()
+
+
+def select_workspace(store, token, workspace_id):
+    store.choose_space(token, workspace_id)
+    st.session_state['active_workspace'] = workspace_id
+    reset_space()
+    st.rerun()
+
+
+def team_entry_form(store, token, mode):
+    if mode == 'create':
+        with st.form('create_team'):
+            name = st.text_input('团队名称', max_chars=80)
+            description = st.text_area('团队简介（可选）', max_chars=500)
+            if st.form_submit_button('创建团队并进入', type='primary'):
+                try:
+                    workspace = store.create_team(token, name, description)
+                    select_workspace(store, token, workspace)
+                except AccessError as exc:
+                    st.error(str(exc))
+    else:
+        code = st.text_input('邀请码', max_chars=128, type='password')
+        note = st.text_input('申请说明（可选）', max_chars=1000)
+        if st.button('核对邀请的团队'):
+            try:
+                result = store.request_join(token, code)
+                st.session_state['join_preview'] = {'code': code, **result}
+            except AccessError as exc:
+                st.error(str(exc))
+        preview = st.session_state.get('join_preview')
+        if preview and preview['code'] == code:
+            st.info('申请加入：' + preview['name'] + '。管理员审核通过后才可访问团队数据。')
+            if st.button('确认提交加入申请'):
+                try:
+                    store.request_join(token, code, note, confirm=True)
+                    st.success('申请已提交，请等待管理员审核。')
+                except AccessError as exc:
+                    st.error(str(exc))
+
+
+def close_team_entry():
+    st.session_state.pop('_team_entry', None)
+    st.session_state.pop('join_preview', None)
+
+
+@st.dialog('团队协作', on_dismiss=close_team_entry)
+def team_entry_dialog(store, token, mode):
+    section_title('创建团队' if mode == 'create' else '加入其他团队',
+                  '创建后你将成为团队所有者。' if mode == 'create' else '输入邀请码，核对团队后提交申请，等待管理员审核。', 'analysis')
+    team_entry_form(store, token, mode)
+
+
+def personal_entry(store, token, spaces):
+    with st.container(border=True, key='workspace_personal'):
+        section_title('个人工作', '生成 → 逐条审核 → 定向修订 → 批准导出', 'review')
+        if st.button('进入我的个人空间', type='primary', width='stretch'):
+            select_workspace(store, token, next(s['id'] for s in spaces if s['kind'] == 'personal'))
+
+
+def workspace_picker(store, token, spaces):
+    page_header('选择工作方式', '个人工作独立保存；团队协作共享项目，由管理员分配权限。', 'workspace', '工作空间')
+    teams = [space for space in spaces if space['kind'] == 'team']
+    if not teams:
+        personal, team_entry = st.columns(2, gap='large')
+        with personal:
+            personal_entry(store, token, spaces)
+        with team_entry, st.container(border=True, key='workspace_team_empty'):
+            section_title('创建或加入一个团队', '你还没有加入团队。创建团队，或通过邀请码申请加入。', 'analysis')
+            choice = st.radio('团队入口', ['创建团队', '加入团队'], horizontal=True)
+            team_entry_form(store, token, 'create' if choice == '创建团队' else 'join')
+        return
+    team_list, actions = st.columns([3, 1.2], gap='large')
+    with team_list:
+        section_title('我的团队', f'共 {len(teams)} 个团队，选择团队继续协作。', 'analysis')
+        for space in teams:
+            with st.container(border=True, key='workspace_team_card_' + space['id']):
+                st.text(space['name'])
+                st.caption(ROLE_NAMES[space['role']] + (' · 已归档，仅可查阅' if space['archived'] else ' · 协作中'))
+                if space['description']:
+                    st.text(space['description'])
+                if st.button('进入团队', key='space_' + space['id']):
+                    select_workspace(store, token, space['id'])
+    with actions:
+        personal_entry(store, token, spaces)
+        with st.container(border=True, key='workspace_team_actions'):
+            section_title('更多团队', '创建新团队，或申请加入其他团队。', 'analysis')
+            if st.button('创建团队', key='open_create_team', width='stretch'):
+                close_team_entry()
+                st.session_state['_team_entry'] = 'create'
+            if st.button('加入其他团队', key='open_join_team', width='stretch'):
+                close_team_entry()
+                st.session_state['_team_entry'] = 'join'
+    mode = st.session_state.get('_team_entry')
+    if mode in {'create', 'join'}:
+        team_entry_dialog(store, token, mode)
 
 
 def team_management(store, token, space):
