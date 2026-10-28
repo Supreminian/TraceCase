@@ -64,7 +64,9 @@ def enter(path):
                 st.rerun()
             if chosen['kind'] == 'team':
                 st.toggle('团队管理', key='show_team_management')
-            st.link_button('修改密码', '/auth/password')
+            st.link_button('登录账号与绑定', '/auth/account')
+            if user.get('password_login', True):
+                st.link_button('修改密码', '/auth/password')
             st.link_button('退出登录', '/auth/logout')
         if st.session_state.get('show_team_management'):
             team_management(store, token, chosen)

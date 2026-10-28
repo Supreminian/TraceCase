@@ -353,7 +353,7 @@ def test_invite_reset_team_settings_and_account_schema_upgrade(context):
         db.execute('UPDATE account_meta SET version=1')
     Accounts(path)
     with store.db() as db:
-        assert db.execute('SELECT version FROM account_meta').fetchone()[0] == 3
+        assert db.execute('SELECT version FROM account_meta').fetchone()[0] == 4
     with store.db(write=True) as db:
         db.execute('UPDATE account_meta SET version=99')
     with pytest.raises(AccessError, match='版本'):

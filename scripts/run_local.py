@@ -26,7 +26,7 @@ def main():
     try:
         import uvicorn
         from sdlc.gateway import app
-        uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('SDLC_GATEWAY_PORT', '8501')), log_level='warning')
+        uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('SDLC_GATEWAY_PORT', '8501')), log_level='warning', access_log=False)
     finally:
         child.terminate()
         try:

@@ -37,6 +37,10 @@ export GEMINI_API_KEY='在本机设置，不要提交 Git'
 
 输入限制为文件 100 KiB、正文 20,000 个 Unicode 字符。请使用虚构或脱敏的需求，不在 PRD 中输入密钥。
 
+## GitHub 登录
+
+已加入 GitHub 登录和已有账号的显式绑定，复用原有个人／团队空间及权限。需由维护者配置 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`、`GITHUB_REDIRECT_URI` 并重启；未配置时按钮显示暂不可用，保留密码登录。详见 [GitHub 登录配置与验证](docs/GITHUB_LOGIN.md)。
+
 ## 审核与追溯
 
 - 唯一通用生成 Prompt 内部标识为 `GENERAL-R1`，用户不需要选择版本；历史记录中的旧标识不改写。审核修订和校验修复属于操作类型，复用同一个通用需求约束。

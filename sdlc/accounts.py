@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS workspaces(
  name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', owner_id TEXT NOT NULL REFERENCES users(id),
  archived INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS personal_owner ON workspaces(owner_id) WHERE kind='personal';
+CREATE TABLE IF NOT EXISTS external_identities(
+ provider TEXT NOT NULL CHECK(provider='github'), subject TEXT NOT NULL,
+ user_id TEXT NOT NULL REFERENCES users(id), login TEXT NOT NULL, created_at REAL NOT NULL,
+ PRIMARY KEY(provider,subject), UNIQUE(provider,user_id));
+CREATE TABLE IF NOT EXISTS oauth_flows(
+ state_hash TEXT PRIMARY KEY, browser_hash TEXT NOT NULL, verifier TEXT NOT NULL,
+ expires_at REAL NOT NULL, target_user_id TEXT REFERENCES users(id), previous_session_hash TEXT NOT NULL,
+ client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workspace_preferences(
  user_id TEXT PRIMARY KEY REFERENCES users(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id));
 CREATE TABLE IF NOT EXISTS memberships(
@@ -101,11 +109,11 @@ class Accounts:
         Service(path)
         with self.db() as db:
             has_accounts = db.execute("SELECT 1 FROM sqlite_master WHERE name='account_meta'").fetchone()
-            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] > 3:
+            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] > 4:
                 raise AccessError('账号数据库版本不兼容，请使用匹配版本的应用。')
-            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] == 3:
+            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] == 4:
                 return
-            if not has_accounts or db.execute('SELECT version FROM account_meta').fetchone()[0] < 3:
+            if not has_accounts or db.execute('SELECT version FROM account_meta').fetchone()[0] < 4:
                 backup = Path(self.path + '.before-accounts-' + uid()[:8] + '.sqlite3')
                 backup.touch(mode=0o600, exist_ok=False)
                 with sqlite3.connect(backup) as target:
@@ -114,14 +122,16 @@ class Accounts:
             # executescript owns its transaction; never execute it inside a caller's transaction.
             db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
             if not db.execute('SELECT 1 FROM account_meta').fetchone():
-                db.execute('INSERT INTO account_meta VALUES (3)')
+                db.execute('INSERT INTO account_meta VALUES (4)')
             if 'kind' not in {r[1] for r in db.execute('PRAGMA table_info(generation_jobs)')}:
                 db.execute("ALTER TABLE generation_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'case_revision'")
                 db.execute("UPDATE generation_jobs SET kind='initial' WHERE case_id='__initial__'")
             db.execute('DROP INDEX IF EXISTS active_case_job')
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_case_revision_job ON generation_jobs(run_id,case_id) WHERE kind='case_revision' AND status IN ('queued','running')")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_initial_job ON generation_jobs(project_id,user_id) WHERE kind='initial' AND status IN ('queued','running')")
-            db.execute('UPDATE account_meta SET version=3')
+            if 'password_login' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:
+                db.execute('ALTER TABLE users ADD COLUMN password_login INTEGER NOT NULL DEFAULT 1')
+            db.execute('UPDATE account_meta SET version=4')
         Path(self.path).chmod(0o600)
 
     @contextmanager
@@ -145,7 +155,7 @@ class Accounts:
     def identity(db, token):
         if not isinstance(token, str) or not 1 <= len(token) <= 128:
             raise AccessError('请先登录。')
-        row = db.execute('''SELECT u.id,u.username,u.display_name FROM sessions s JOIN users u
+        row = db.execute('''SELECT u.id,u.username,u.display_name,u.password_login FROM sessions s JOIN users u
             ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1''',
             (digest(token or ''), time.time())).fetchone()
         if not row:
@@ -209,7 +219,7 @@ class Accounts:
         user_id, workspace_id = uid(), uid()
         try:
             with self.db(write=True) as db:
-                db.execute('INSERT INTO users VALUES (?,?,?,?,?,1)',
+                db.execute('INSERT INTO users(id,username,display_name,password_hash,created_at,enabled) VALUES (?,?,?,?,?,1)',
                            (user_id, username, display_name, hashed, time.time()))
                 db.execute("INSERT INTO workspaces(id,kind,name,owner_id) VALUES (?,'personal',?,?)",
                            (workspace_id, '个人工作', user_id))
@@ -225,7 +235,7 @@ class Accounts:
         self.throttle('login-ip:' + source, 30)
         self.throttle('login-user:' + digest(username), 10)
         with self.db() as db:
-            user = db.execute('SELECT * FROM users WHERE username=? AND enabled=1', (username,)).fetchone()
+            user = db.execute('SELECT * FROM users WHERE username=? AND enabled=1 AND password_login=1', (username,)).fetchone()
         # Same expensive verification for unknown accounts, without storing a shared credential.
         encoded = user['password_hash'] if user else DUMMY_HASH
         try:
@@ -251,6 +261,8 @@ class Accounts:
     def change_password(self, token, old_password, new_password):
         self._password(new_password)
         user = self.me(token)
+        if not user['password_login']:
+            raise AccessError('此账号使用 GitHub 登录，无需本地密码。')
         self.throttle('password:' + user['id'], 10)
         with self.db() as db:
             row = db.execute('SELECT password_hash FROM users WHERE id=?', (user['id'],)).fetchone()
