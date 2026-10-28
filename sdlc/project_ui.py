@@ -4,7 +4,7 @@ import streamlit as st
 from sdlc.service import ServiceError
 
 
-DRAFT_FIELDS = ('prd_text', 'parent_run_id', 'input_source', 'prompt_version', 'selected_run', 'sample')
+DRAFT_FIELDS = ('prd_text', 'parent_run_id', 'input_source', 'selected_run')
 
 
 def project_changed():
@@ -144,9 +144,9 @@ def project_cases(service, go_to):
                             default=['pending_review', 'approved', 'returned'],
                             format_func=lambda x: {'pending_review': '待审核', 'approved': '已通过', 'returned': '已退回'}[x])
     priorities = st.multiselect('优先级', ['P0', 'P1', 'P2'], default=['P0', 'P1', 'P2'])
-    categories = st.multiselect('用例分类', ['normal', 'boundary', 'exception'],
-                                default=['normal', 'boundary', 'exception'],
-                                format_func=lambda x: {'normal': '正常', 'boundary': '边界', 'exception': '异常'}[x])
+    category_options = sorted({c['content']['category'] for c in run['cases']})
+    categories = st.multiselect('用例分类', category_options, default=category_options,
+                                format_func=lambda x: {'normal': '正常', 'boundary': '边界', 'exception': '异常', 'security': '安全'}.get(x, x))
     filtered = [c for c in run['cases'] if c['status'] in status and c['content']['priority'] in priorities
                 and c['content']['category'] in categories]
     st.caption(f"批次 {selected} · 筛选后 {len(filtered)} / {len(run['cases'])} 条，不合并其他批次。")

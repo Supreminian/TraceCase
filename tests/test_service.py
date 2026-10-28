@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from sdlc.providers import FixtureProvider, list_samples
+from tests.fixture_provider import FixtureProvider, list_samples
 from sdlc.service import ServiceError
 from tests.helpers import scoped_service as Service
 

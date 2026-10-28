@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from sdlc.providers import list_samples
+from tests.fixture_provider import list_samples
 from sdlc.service import Service, ServiceError
 from sdlc.storage import LEGACY_PROJECT
 
@@ -157,14 +157,14 @@ def test_cannot_archive_generating_run_or_delete_project(workspace):
 def legacy_database(path):
     db = sqlite3.connect(path)
     db.executescript((Path(__file__).parent / 'fixtures/schema_v1.sql').read_text())
-    output = json.loads(Path('samples/normal.output.json').read_text())
+    output = json.loads(Path('tests/fixtures/generation/normal.output.json').read_text())
     from sdlc.domain import prepare_input
     from sdlc.prompts import build_prompt
     prepared = prepare_input(text=sample())
     for run_id, parent in [('old-parent', None), ('old-child', 'old-parent')]:
         db.execute('INSERT INTO runs (id,parent_run_id,created_at,operator,status,input_json,config_json,prompt_json,output_json) VALUES (?,?,?,?,?,?,?,?,?)',
                    (run_id, parent, '2026-10-26T00:00:00+00:00', 'old-reviewer', 'valid',
-                    json.dumps(prepared), '{}', json.dumps(build_prompt('V2', prepared['paragraphs'])), json.dumps(output)))
+                    json.dumps(prepared), '{}', json.dumps(build_prompt('GENERAL-R1', prepared['paragraphs'])), json.dumps(output)))
         for c in output['test_cases']:
             db.execute('INSERT INTO case_versions VALUES (?,?,?,?,?,?)', (run_id, c['case_id'], 1, json.dumps(c), '2026-10-26T00:00:00+00:00', 'old-reviewer'))
             db.execute('INSERT INTO case_heads VALUES (?,?,?,?,?)', (run_id, c['case_id'], 1, 1, 'approved'))
@@ -230,7 +230,7 @@ def test_newer_database_is_not_downgraded(tmp_path):
 
 def test_inflight_generation_keeps_original_project_and_blocks_archive(workspace):
     import threading
-    from sdlc.providers import FixtureProvider
+    from tests.fixture_provider import FixtureProvider
     admin, a, b = workspace
     entered, release = threading.Event(), threading.Event()
     results, errors = [], []

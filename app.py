@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from sdlc.domain import prepare_input
-from sdlc.providers import CompatibleProvider, GeminiProvider, list_samples
+from sdlc.providers import CompatibleProvider, GeminiProvider
 from sdlc.service import Service, ServiceError
 from sdlc.project_ui import project_changed, projects_view, overview, project_cases, export_history, remember_draft, upload_changed
 
@@ -20,7 +20,8 @@ from sdlc.project_ui import project_changed, projects_view, overview, project_ca
 ROOT = Path(__file__).resolve().parent
 PAGES = ["新建运行", "运行详情与审核", "运行历史", "项目概览", "项目用例", "导出记录", "项目列表"]
 STATUS = {"pending_review": "待审核", "approved": "已通过", "returned": "已退回"}
-CATEGORY = {"normal": "正常", "boundary": "边界", "exception": "异常"}
+CATEGORY = {"normal": "正常", "boundary": "边界", "exception": "异常", "security": "安全",
+            "performance": "性能", "usability": "易用性", "compatibility": "兼容性"}
 
 
 def local_time(value: str | None) -> str:
@@ -87,41 +88,29 @@ def linked_source_ids(run: dict, content: dict) -> list[str]:
 def new_run(service: Service, operator: str) -> None:
     st.title("从需求到可追溯测试")
     st.caption("输入 → 结构校验 → 逐条复核 → 批准导出")
-    mode = st.radio("生成方式", ["固定样例回放", "模型生成"], horizontal=True, key="generation_mode")
     provider = None
     configured = True
-    confirmed = True
-    if mode == "模型生成":
-        vendor = st.selectbox("模型服务", ["Google Gemini", "其他兼容接口"], key="model_vendor")
-        try:
-            provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
+    vendor = st.selectbox("模型服务", ["Google Gemini", "其他兼容接口"], key="model_vendor")
+    try:
+        provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
+        st.caption(f"使用 {provider.config['model']} 分析需求并生成用例。")
+        with st.expander("查看模型连接配置", expanded=False):
             st.json(provider.config)
-        except ValueError as error:
-            configured = False
-            st.warning(str(error))
-        if vendor == "Google Gemini":
-            st.caption("默认与桌宠相同的 gemini-3.5-flash-lite。免费层受 Google 项目配额限制，不自动开通计费；免费层输入可能用于改进产品，仅使用虚构数据。")
-        confirmed = st.checkbox("确认将本次 PRD 发送至上述配置地址，并承担可能的调用费用", key="model_confirm")
-        st.caption("配置环境变量后重启应用。一次生成发送一个请求，不自动重试；输出须人工审核。")
-    else:
-        st.info("固定样例模式 · 未调用模型。当前只接受与预置样例完全匹配的输入。")
+    except ValueError as error:
+        configured = False
+        st.warning(str(error))
+    st.caption("点击生成会将 PRD 发送至所选服务。包含功能、角色、规则与澄清提取；"
+               "若输出格式不正确，自动修复一次，最多两次调用，可能消耗额度或产生费用。")
     st.caption("请使用虚构或脱敏的需求文档，无需预先编写段落编号。上传 .md / .markdown，最大 100 KiB；正文最多 20,000 字符。")
     if not operator.strip():
         st.caption("开始前请在页面上方填写操作者标识。")
-    source = st.radio("输入方式", ["固定样例", "粘贴 Markdown", "上传 Markdown"],
-                      horizontal=True, key="input_source")
+    if st.session_state.get("input_source") not in {"粘贴 Markdown", "上传 Markdown"}:
+        st.session_state["input_source"] = "粘贴 Markdown"
+    source = st.radio("输入方式", ["粘贴 Markdown", "上传 Markdown"], horizontal=True, key="input_source")
     kwargs: dict = {}
-    samples = list_samples()
-    if source == "固定样例":
-        mapping = {sample["id"]: sample for sample in samples}
-        sample_id = st.selectbox("演示样例", list(mapping),
-                                 format_func=lambda item: mapping[item]["label"], key="sample")
-        kwargs["text"] = mapping[sample_id]["text"]
-        with st.expander("查看完整样例 PRD", expanded=False):
-            st.code(kwargs["text"], language="markdown", wrap_lines=True)
-    elif source == "粘贴 Markdown":
+    if source == "粘贴 Markdown":
         kwargs["text"] = st.text_area("PRD 正文", height=300, key="prd_text",
-                                      placeholder="# 虚构费用报销审批\n\n请粘贴需求正文。")
+                                      placeholder="粘贴产品需求文档，无需套用固定模板或预先编写编号。")
     else:
         uploaded = st.file_uploader("选择 Markdown 文件", type=["md", "markdown"], key=f"prd_file_{service.project_id}",
                                     on_change=upload_changed, args=(service.project_id,))
@@ -136,28 +125,15 @@ def new_run(service: Service, operator: str) -> None:
                 st.rerun()
     parent = st.text_input("关联父运行 ID（可选）", key="parent_run_id",
                            help="补充业务事实或重新生成时关联旧运行；原记录与审批保留。")
-    prompt_labels = {
-        "v3": "通用需求分析 · 强化引用与澄清关联（推荐）",
-        "v2": "费用报销分析 · 结构约束与边界检查",
-        "v1": "费用报销分析 · 基础生成指令",
-    }
-    prompt_version = st.selectbox("Prompt 版本", list(prompt_labels),
-                                  format_func=prompt_labels.__getitem__, key="prompt_version")
-    if prompt_version == "v3":
-        st.caption("按 PRD 实际领域生成，明确规则 ID、段落引用与澄清依赖；尚未完成质量评测。")
-    if mode == "固定样例回放":
-        st.caption("样例结果固定，切换 Prompt 仅验证配置留存，不能用于比较模型效果。")
     left, right = st.columns(2)
     preview = left.button("检查输入与段落", width="stretch")
     generate = right.button("生成测试用例", type="primary", key="generate",
-                            width="stretch", disabled=not operator.strip() or not configured or not confirmed)
+                            width="stretch", disabled=not operator.strip() or not configured)
     reasons = []
     if not operator.strip():
         reasons.append("请填写页面上方的操作者标识")
     if not configured:
         reasons.append("请完成模型配置")
-    if not confirmed:
-        reasons.append("请勾选本次 PRD 的发送确认")
     if reasons:
         st.warning("生成按钮暂不可用：" + "；".join(reasons) + "。")
     fingerprint = hashlib.sha256(repr(kwargs).encode("utf-8")).hexdigest()
@@ -177,8 +153,8 @@ def new_run(service: Service, operator: str) -> None:
     remember_draft()
     if generate:
         try:
-            with st.spinner("保存输入、生成并校验…"):
-                run_id = service.generate(**kwargs, operator=operator, prompt_version=prompt_version,
+            with st.spinner("正在提取功能、角色和业务规则并生成用例；必要时自动修复格式…"):
+                run_id = service.generate_from_prd(**kwargs, operator=operator,
                                           parent_run_id=parent.strip() or None,
                                           request_id=request_id(), provider=provider)
             go_to(PAGES[1], run_id)
@@ -276,9 +252,10 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
             expected = lines("预期结果（每行一项）", content["expected_results"], f"expected_{token}")
             priority = st.selectbox("优先级建议", ["P0", "P1", "P2"],
                                     index=["P0", "P1", "P2"].index(content["priority"]))
-            category = st.selectbox("分类", list(CATEGORY),
-                                    index=list(CATEGORY).index(content["category"]),
-                                    format_func=lambda item: CATEGORY[item])
+            category_options = list(dict.fromkeys([*CATEGORY, content["category"]]))
+            category = st.selectbox("分类", category_options,
+                                    index=category_options.index(content["category"]),
+                                    format_func=lambda item: CATEGORY.get(item, item))
             edit_reason = st.text_area("修改理由", key=f"edit_reason_{token}")
             edit_submitted = st.form_submit_button("保存修订（生成新版本）", disabled=not operator.strip() or st.session_state.get("_project_archived", False))
         if edit_submitted:
@@ -309,7 +286,12 @@ def clarifications_tab(service: Service, run: dict, operator: str) -> None:
         mapping = {c["content"]["id"]: c for c in clarifications}
         selected = st.selectbox("选择澄清项", list(mapping), key=f"clarification_{run['id']}")
         item = mapping[selected]
-        st.json(item)
+        st.subheader(item["content"]["question"])
+        st.text("问题编号：" + selected)
+        st.text("处理状态：" + item.get("status", "open"))
+        st.caption("影响执行与判断" if item["content"]["blocking"] else "补充核对项")
+        with st.expander("查看澄清项 JSON", expanded=False):
+            st.json(item)
         st.caption("直接引用及关联规则来源：" + "、".join(linked_source_ids(run, item["content"])))
         source_view(run["input"], f"clarification_source_{run['id']}_{selected}",
                     linked_source_ids(run, item["content"]))
@@ -461,7 +443,7 @@ def validation_repair(service: Service, run: dict, operator: str) -> None:
             display_error(error)
     for error in errors[:5]:
         st.text(error)
-    with st.expander("携带校验错误修复（创建关联新运行）", expanded=True):
+    with st.expander("携带校验错误修复（创建关联新运行）", expanded=False):
         st.caption("发送原 PRD、原始输出及全部校验错误，使用 VALIDATION-R1 提示修复。"
                    "新结果仍需完整校验和人工审核；不会覆盖旧运行，也不保证一次修复成功。")
         vendor = st.selectbox("校验修复模型服务", ["Google Gemini", "其他兼容接口"],
@@ -469,7 +451,8 @@ def validation_repair(service: Service, run: dict, operator: str) -> None:
         provider = None
         try:
             provider = GeminiProvider() if vendor == "Google Gemini" else CompatibleProvider()
-            st.json(provider.config)
+            with st.expander("查看修复模型配置", expanded=False):
+                st.json(provider.config)
         except ValueError as error:
             st.info(str(error))
         confirmed = st.checkbox("确认发送原 PRD、旧输出及错误到上述模型，消耗一次调用额度并可能产生费用",
@@ -498,7 +481,7 @@ def detail(service: Service, operator: str) -> None:
         except ServiceError:
             pass
     if not runs:
-        st.info("还没有运行。请先从新建运行页面生成固定样例。")
+        st.info("还没有运行。请在新建运行页面输入 PRD 并生成用例。")
         return
     ids = [run["id"] for run in runs]
     selected = st.session_state.get("selected_run")
@@ -565,7 +548,8 @@ def detail(service: Service, operator: str) -> None:
             if run.get("error"):
                 st.code(run["error"], language=None, wrap_lines=True)
             validation_repair(service, run, operator)
-            st.json(run.get("validation", {}))
+            with st.expander("查看详细校验记录（JSON）", expanded=False):
+                st.json(run.get("validation", {}))
             if run["status"] == "generating":
                 st.info("若上次应用进程已经退出，可记录为生成中断，再创建关联运行重试。")
                 confirmed = st.checkbox("我已确认该运行的生成进程已经结束", key=f"interrupted_{run_id}")
@@ -588,7 +572,17 @@ def detail(service: Service, operator: str) -> None:
         for field, label in [("features", "功能"), ("roles", "业务角色"),
                              ("business_rules", "业务规则")]:
             with st.expander(label, expanded=field == "business_rules"):
-                st.json((run.get("output") or {}).get(field, []))
+                items = (run.get("output") or {}).get(field, [])
+                if not items:
+                    st.info("暂无提取内容。")
+                for item in items:
+                    st.markdown("**" + str(item.get("name", item["id"])) + "**")
+                    st.text(item.get("description", item.get("statement", "")))
+                    for responsibility in item.get("responsibilities", []):
+                        st.text("• " + responsibility)
+                    st.caption("来源：" + "、".join(item.get("paragraph_ids", [])))
+                with st.expander("查看" + label + " JSON", expanded=False):
+                    st.json(items)
         with st.expander("完整输入快照"):
             st.json(run["input"])
     with tabs[3]:
@@ -612,7 +606,9 @@ def detail(service: Service, operator: str) -> None:
         st.divider()
         st.subheader("历史导出快照")
         for index, item in enumerate(run.get("exports", [])):
-            st.json(item)
+            st.text(item.get("filename", item["id"]))
+            with st.expander("查看历史导出记录 " + item['id'], expanded=False):
+                st.json(item)
             if st.button("准备下载此历史快照", key=f"historical_export_{run_id}_{index}"):
                 try:
                     exported = service.get_export(item["id"])
@@ -683,7 +679,7 @@ def main() -> None:
             page = st.radio("工作空间", PAGES, key="page")
             st.divider()
             st.caption("操作者标识在主页面填写，用于记录生成和审批操作。")
-            st.caption("样例回放 / 可配置模型 · SQLite 留存")
+            st.caption("通用 PRD 分析 · 模型生成 · SQLite 留存")
             st.caption("学习原型，使用虚构数据。项目归属管理不替代多人身份与权限系统。")
         operator = st.text_input("操作者标识（必填）", key="operator", max_chars=64,
                                  placeholder="例如：demo-reviewer",
@@ -703,7 +699,7 @@ def main() -> None:
         if page == "新建运行":
             if project["status"] == "active":
                 draft = st.session_state.get("_project_drafts", {}).get(project_id, {})
-                for key in ("prd_text", "parent_run_id", "input_source", "prompt_version", "sample"):
+                for key in ("prd_text", "parent_run_id", "input_source"):
                     if key in draft:
                         st.session_state.setdefault(key, draft[key])
                 new_run(service, operator)

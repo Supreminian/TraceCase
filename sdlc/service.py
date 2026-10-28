@@ -14,8 +14,8 @@ from pathlib import Path
 from sdlc import __version__
 from sdlc.domain import Clarification, prepare_input, validate_current, validate_output
 from sdlc.exports import render_export
-from sdlc.prompts import build_prompt, build_review_prompt, build_validation_repair_prompt
-from sdlc.providers import FixtureProvider, ProviderError, SavedOutputProvider
+from sdlc.prompts import PROMPT_VERSION, build_prompt, build_review_prompt, build_validation_repair_prompt
+from sdlc.providers import ProviderError, SavedOutputProvider, configured_provider
 from sdlc.storage import initialize
 
 
@@ -210,12 +210,12 @@ class Service:
                 FROM case_heads h JOIN runs r ON r.id=h.run_id WHERE r.project_id=?""", (self.project_id,)).fetchone()))
             return stats
 
-    def generate(self, text=None, filename=None, data=None, *, operator, prompt_version="v2",
+    def generate(self, text=None, filename=None, data=None, *, operator, prompt_version=PROMPT_VERSION,
                  parent_run_id=None, provider=None, request_id=None, review_source_revision=None,
                  validation_source_revision=None, local_revalidation=False):
         operator, _ = actor_reason(operator)
         prepared = prepare_input(text=text, filename=filename, data=data)
-        provider = provider or FixtureProvider()
+        provider = provider or configured_provider()
         prompt = build_prompt(prompt_version, prepared["paragraphs"])
         config = safe_metadata(provider.config)
         config.update({"app_version": __version__, "schema_version": "1.0"})
@@ -245,9 +245,9 @@ class Service:
                 source = self._run(db, parent_run_id)
                 if source["revision"] != validation_source_revision:
                     raise ServiceError("运行记录已有变化，请刷新后重试。")
-                if (source["status"] != "invalid" or not source.get("validation", {}).get("json_valid")
+                if (source["status"] != "invalid" or not source.get("raw_output")
                         or source.get("config", {}).get("finish_reason") not in {None, "stop"}):
-                    raise ServiceError("仅完整返回 JSON 但校验失败的运行可进行结构修复。")
+                    raise ServiceError("仅完整返回响应但校验失败的运行可进行结构修复。")
                 if source["input"]["input_hash"] != prepared["input_hash"]:
                     raise ServiceError("修复必须使用原始 PRD；需求已改变时请创建新运行。")
                 if provider.config.get("provider") == "fixture":
@@ -277,7 +277,7 @@ class Service:
                 if not returned_ids:
                     raise ServiceError("本轮没有退回用例，无需模型修订。")
                 if provider.config.get("provider") == "fixture":
-                    raise ServiceError("固定样例不能修订退回意见，请配置实际模型。")
+                    raise ServiceError("该生成器不能修订退回意见，请配置实际模型。")
                 revision_snapshot = self._effective(db, parent_run_id, cases)
                 feedback = []
                 for c in cases:
@@ -312,7 +312,7 @@ class Service:
             latency = (time.perf_counter() - start) * 1000
         except Exception as exc:
             # Unknown provider exceptions may contain authorization headers; never persist them.
-            message = str(exc) if isinstance(exc, ProviderError) or type(provider) is FixtureProvider else f"模型调用失败（{type(exc).__name__}）"
+            message = str(exc) if isinstance(exc, ProviderError) else f"模型调用失败（{type(exc).__name__}）"
             with self.connection(write=True) as db:
                 if self._run(db, run_id)["status"] != "generating":
                     return run_id
@@ -379,21 +379,50 @@ class Service:
     def revise_returned(self, run_id, expected_run_revision, operator, provider, request_id):
         source = self.get_run(run_id)
         return self.generate(text=source["input"]["normalized_text"], operator=operator,
-                             prompt_version="V2", parent_run_id=run_id, provider=provider,
+                             prompt_version=PROMPT_VERSION, parent_run_id=run_id, provider=provider,
                              request_id=request_id, review_source_revision=expected_run_revision)
 
     def repair_validation(self, run_id, expected_run_revision, operator, provider, request_id):
         source = self.get_run(run_id)
         return self.generate(text=source["input"]["normalized_text"], operator=operator,
-                             prompt_version="V3", parent_run_id=run_id, provider=provider,
+                             prompt_version=PROMPT_VERSION, parent_run_id=run_id, provider=provider,
                              request_id=request_id, validation_source_revision=expected_run_revision)
 
     def revalidate_existing(self, run_id, expected_run_revision, operator, request_id):
         source = self.get_run(run_id)
         return self.generate(text=source["input"]["normalized_text"], operator=operator,
-                             prompt_version="V3", parent_run_id=run_id,
+                             prompt_version=PROMPT_VERSION, parent_run_id=run_id,
                              provider=SavedOutputProvider(source["raw_output"]), request_id=request_id,
                              validation_source_revision=expected_run_revision, local_revalidation=True)
+
+    def generate_from_prd(self, *, provider=None, request_id=None, **kwargs):
+        """One user action; at most one bounded model repair, with both attempts retained."""
+        provider = provider or configured_provider()
+        request_id = request_id or identifier()
+        run_id = self.generate(provider=provider, request_id=request_id, **kwargs)
+        run = self.get_run(run_id)
+        if (run['status'] != 'invalid' or not run.get('raw_output')
+                or run['config'].get('finish_reason') not in {None, 'stop'}
+                or provider.config.get('real_model_call') is False):
+            return run_id
+        repair_id = request_id + ':auto-repair'
+        with self.connection() as db:
+            cached = db.execute('SELECT result_json FROM requests WHERE id=?', (repair_id,)).fetchone()
+        if cached:
+            child_id = json.loads(cached['result_json'])
+            self.get_run(child_id)  # Enforce project scope on reused requests.
+            return child_id
+        try:
+            return self.repair_validation(run_id, run['revision'], kwargs['operator'], provider, repair_id)
+        except ServiceError:
+            # A concurrent identical request may already have created the repair child.
+            with self.connection() as db:
+                cached = db.execute('SELECT result_json FROM requests WHERE id=?', (repair_id,)).fetchone()
+            if cached:
+                child_id = json.loads(cached['result_json'])
+                self.get_run(child_id)
+                return child_id
+            return run_id
 
     def _run(self, db, run_id):
         row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -499,7 +528,7 @@ class Service:
         output["clarifications"] = questions
         for rule in output["business_rules"]:
             if rule["status"] != "clear" and not any(
-                q["blocking"] and rule["id"] in q["requirement_ids"] for q in questions
+                rule["id"] in q["requirement_ids"] for q in questions
             ):
                 rule["status"] = "clear"
         output["test_cases"] = [c["content"] for c in (cases if cases is not None else self._cases(db, run_id))]

@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from sdlc.providers import FixtureProvider, ModelResponse, list_samples
+from sdlc.providers import ModelResponse
+from tests.fixture_provider import FixtureProvider, list_samples
 from sdlc.service import ServiceError
 from tests.helpers import scoped_service as Service
 
@@ -115,7 +116,7 @@ def test_incomplete_review_and_no_return_cannot_start_model(tmp_path):
 
 def test_fixture_is_not_a_revision_engine(reviewed):
     service, source = reviewed
-    with pytest.raises(ServiceError, match='固定样例'):
+    with pytest.raises(ServiceError, match='实际模型'):
         service.revise_returned(source['id'], source['revision'], 'tester', FixtureProvider(), uuid4().hex)
 
 

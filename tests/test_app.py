@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from sdlc.providers import list_samples
+from tests.fixture_provider import list_samples
 from tests.helpers import scoped_service as Service
 
 
@@ -24,6 +24,8 @@ def workspace(tmp_path, monkeypatch):
     path = tmp_path / "app.sqlite3"
     monkeypatch.setenv("SDLC_DB_PATH", str(path))
     service = Service(path)
+    from tests.fixture_provider import FixtureProvider
+    monkeypatch.setattr("sdlc.providers.GeminiProvider", FixtureProvider)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20).run()
     assert_clean(app)
     app.selectbox(key="current_project").select(service.project_id).run()
@@ -33,8 +35,8 @@ def workspace(tmp_path, monkeypatch):
 
 
 def generate(app, service, sample_id=None):
-    if sample_id:
-        app.selectbox(key="sample").select(sample_id).run()
+    sample = next(x for x in list_samples() if x['id'] == (sample_id or 'normal'))
+    app.text_area(key="prd_text").input(sample['text']).run()
     app.button(key="generate").click().run()
     assert_clean(app)
     runs = service.list_runs()
@@ -183,9 +185,9 @@ def test_completed_returned_review_shows_next_actions_and_manual_revision(worksp
 
 def test_model_revision_ui_starts_linked_review_without_inheriting_approval(workspace, monkeypatch):
     from tests.test_review_iteration import RevisionProvider
-    monkeypatch.setattr("sdlc.providers.GeminiProvider", RevisionProvider)
     app, service = workspace
     run = generate(app, service)
+    monkeypatch.setattr("sdlc.providers.GeminiProvider", RevisionProvider)
     for index, c in enumerate(run["cases"]):
         service.review(run["id"], c["case_id"], c["version"], c["revision"],
                        "return" if index == 0 else "approve", "tester", "明确步骤角色", f"review-{index}")

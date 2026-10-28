@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def app_for(path, monkeypatch):
+    from tests.fixture_provider import FixtureProvider
+    monkeypatch.setattr('sdlc.providers.GeminiProvider', FixtureProvider)
     monkeypatch.setenv('SDLC_DB_PATH', str(path))
     app = AppTest.from_file(str(ROOT / 'app.py'), default_timeout=20).run()
     assert not app.exception
@@ -66,7 +68,7 @@ def test_switching_projects_keeps_drafts_and_clears_review_download_context(tmp_
 
 
 def test_project_case_navigation_export_and_archive(tmp_path, monkeypatch):
-    from sdlc.providers import list_samples
+    from tests.fixture_provider import list_samples
     path = tmp_path / 'ui.sqlite3'
     admin = Service(path)
     pid = admin.create_project('用例项目', '', 'tester')

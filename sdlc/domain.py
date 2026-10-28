@@ -76,7 +76,7 @@ class TestCase(StrictModel):
     steps: Annotated[list[Step], Field(min_length=1)]
     expected_results: Annotated[list[Text], Field(min_length=1)]
     priority: Literal["P0", "P1", "P2"]
-    category: Literal["normal", "boundary", "exception"]
+    category: Annotated[Text, Field(max_length=64)]
     readiness: Literal["ready", "needs_clarification"]
     clarification_ids: list[Text]
 
@@ -222,8 +222,8 @@ def validate_current(output: dict, paragraphs: list[dict]) -> list[str]:
     for index, rule in enumerate(parsed.business_rules):
         if rule.status == "clear" and not any(rule.id in case.requirement_ids for case in parsed.test_cases):
             errors.append(f"business_rules.{index}: 明确规则 {rule.id} 完全没有关联用例")
-        if rule.status != "clear" and not any(q.blocking and rule.id in q.requirement_ids for q in parsed.clarifications):
-            errors.append(f"business_rules.{index}: 非明确规则 {rule.id} 必须关联阻断性澄清")
+        if rule.status != "clear" and not any(rule.id in q.requirement_ids for q in parsed.clarifications):
+            errors.append(f"business_rules.{index}: 非明确规则 {rule.id} 必须关联澄清问题")
     for index, case in enumerate(parsed.test_cases):
         if [step.number for step in case.steps] != list(range(1, len(case.steps) + 1)):
             errors.append(f"test_cases.{index}.steps: 步骤编号必须从 1 开始连续递增")
@@ -272,6 +272,20 @@ def validate_output(raw: str, paragraphs: list[dict]) -> dict:
         question_ids = {q['id'] for q in questions}
         used_ids = {item.get('id', item.get('case_id')) for group in output.values()
                     if isinstance(group, list) for item in group}
+        for rule in rules.values():
+            if rule['status'] == 'clear' or any(rule['id'] in q['requirement_ids'] for q in questions):
+                continue
+            qid = 'CL-RULE-' + rule['id']
+            while qid in used_ids:
+                qid += '-1'
+            used_ids.add(qid)
+            question_ids.add(qid)
+            affected = [c['case_id'] for c in output['test_cases'] if rule['id'] in c['requirement_ids']]
+            questions.append({'id': qid, 'question': f"请确认规则中的未明确条件：{rule['statement']}",
+                'paragraph_ids': rule['paragraph_ids'].copy(), 'requirement_ids': [rule['id']],
+                'affected_case_ids': affected, 'scope': 'case' if affected else 'run',
+                'blocking': True, 'rationale': None})
+            warnings.append(f"规则 {rule['id']} 被标为未明确，已补充人工澄清入口，未补写业务规则。")
         for case in output['test_cases']:
             if set(case['clarification_ids']) - question_ids:
                 continue  # Unknown references still require correction, not silent deletion.

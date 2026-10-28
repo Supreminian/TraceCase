@@ -22,10 +22,10 @@ class Provider:
 
 def setup_run(tmp_path, finish='stop'):
     service = scoped_service(tmp_path / 'repair.sqlite3')
-    raw = Path('samples/normal.output.json').read_text()
+    raw = Path('tests/fixtures/generation/normal.output.json').read_text()
     invalid = json.loads(raw)
     invalid['test_cases'][0]['requirement_ids'] = ['REQ-NOT-DEFINED']
-    source = service.generate(text=Path('samples/normal.md').read_text(), operator='tester',
+    source = service.generate(text=Path('tests/fixtures/generation/normal.md').read_text(), operator='tester',
                               provider=Provider(json.dumps(invalid), finish))
     return service, service.get_run(source), raw
 

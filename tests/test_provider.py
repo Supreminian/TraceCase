@@ -39,12 +39,12 @@ def configure(monkeypatch, url):
 
 
 def test_real_adapter_to_local_mock_and_review_gate(tmp_path, monkeypatch):
-    raw = Path('samples/normal.output.json').read_text()
+    raw = Path('tests/fixtures/generation/normal.output.json').read_text()
     with server(body={'model': 'test-revision', 'choices': [{'message': {'content': raw}, 'finish_reason': 'stop'}],
                       'usage': {'prompt_tokens': 123, 'completion_tokens': 456}}) as (url, calls):
         configure(monkeypatch, url)
         service = Service(tmp_path / 'run.sqlite3')
-        text = Path('samples/normal.md').read_text().replace('完整演示样例', '自定义测试输入')
+        text = Path('tests/fixtures/generation/normal.md').read_text().replace('完整演示样例', '自定义测试输入')
         run_id = service.generate(text=text, operator='tester', provider=CompatibleProvider())
         run = service.get_run(run_id)
         assert run['status'] == 'valid'
@@ -113,12 +113,13 @@ def test_ui_disables_unconfigured_model(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     monkeypatch.setenv('SDLC_DB_PATH', str(tmp_path / 'ui.sqlite3'))
     monkeypatch.delenv('SDLC_MODEL_URL', raising=False)
+    monkeypatch.delenv('GEMINI_API_KEY', raising=False)
+    monkeypatch.delenv('GOOGLE_API_KEY', raising=False)
     service = Service(tmp_path / 'ui.sqlite3')
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py')).run()
     app.selectbox(key='current_project').select(service.project_id).run()
     app.radio(key='page').set_value('新建运行').run()
     app.text_input(key='operator').input('tester').run()
-    app.radio(key='generation_mode').set_value('模型生成').run()
     assert not app.exception
     assert app.button(key='generate').disabled
     assert app.warning
@@ -126,13 +127,13 @@ def test_ui_disables_unconfigured_model(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('truncate_json', [False, True])
 def test_truncated_response_cannot_enter_review(tmp_path, monkeypatch, truncate_json):
-    raw = Path('samples/normal.output.json').read_text()
+    raw = Path('tests/fixtures/generation/normal.output.json').read_text()
     if truncate_json:
         raw = raw[:len(raw) // 2]
     with server(body={'choices': [{'message': {'content': raw}, 'finish_reason': 'length'}]}) as (url, calls):
         configure(monkeypatch, url)
         service = Service(tmp_path / 'run.sqlite3')
-        run_id = service.generate(text=Path('samples/normal.md').read_text(), operator='tester', provider=CompatibleProvider())
+        run_id = service.generate(text=Path('tests/fixtures/generation/normal.md').read_text(), operator='tester', provider=CompatibleProvider())
         run = service.get_run(run_id)
         assert run['status'] == 'invalid'
         assert run['raw_output'] == raw
