@@ -749,6 +749,8 @@ def main() -> None:
     st.set_page_config(page_title="TraceCase · 需求与测试复核", page_icon="🧭", layout="wide",
                        initial_sidebar_state="collapsed")
     apply_style()
+    with st.sidebar:
+        st.markdown('<div class="tc-brand"><span class="tc-logo">TC</span><div><strong>TraceCase</strong><small>需求与测试工作台</small></div></div>', unsafe_allow_html=True)
     if "_navigate_to" in st.session_state:
         st.session_state["page"] = st.session_state.pop("_navigate_to")
     if "_selected_run" in st.session_state:
@@ -776,7 +778,6 @@ def main() -> None:
             st.session_state["current_project"] = None
         st.session_state.setdefault("page", "项目列表")
         with st.sidebar:
-            st.markdown('<div class="tc-brand"><span class="tc-logo">TC</span><div><strong>TraceCase</strong><small>需求与测试工作台</small></div></div>', unsafe_allow_html=True)
             project_id = st.selectbox("当前项目", project_ids, index=None, key="current_project",
                                      placeholder="请选择项目", on_change=project_changed,
                                      format_func=lambda pid: next(p["name"] + ("（已归档）" if p["status"] == "archived" else "")

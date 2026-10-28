@@ -71,12 +71,16 @@ def enter(path):
                 reset_space()
                 st.rerun()
             if chosen['kind'] == 'team':
-                st.toggle('团队管理', key='show_team_management')
+                team_navigation()
             st.link_button('登录账号与绑定', '/auth/account')
             if user.get('password_login', True):
                 st.link_button('修改密码', '/auth/password')
             logout_control(token)
-        if st.session_state.get('show_team_management'):
+        if chosen['kind'] == 'team' and st.session_state.get('show_team_management'):
+            # Retain navigation widgets while the management page hides project controls.
+            for key in ('current_project', 'page'):
+                if key in st.session_state:
+                    st.session_state[key] = st.session_state[key]
             team_management(store, token, chosen)
             st.stop()
         return token, current, user
@@ -87,6 +91,19 @@ def enter(path):
     st.caption('升级前尚无账号归属的项目由本机维护者明确分配，不会自动归入新注册账号。')
     logout_control(token)
     st.stop()
+
+
+def set_team_management(enabled):
+    st.session_state['show_team_management'] = enabled
+
+
+def team_navigation():
+    active = st.session_state.get('show_team_management', False)
+    st.button('团队管理', key='open_team_management', width='stretch',
+              type='primary' if active else 'secondary', on_click=set_team_management, args=(True,))
+    if active:
+        st.button('返回项目工作台', key='close_team_management', width='stretch',
+                  on_click=set_team_management, args=(False,))
 
 
 def select_workspace(store, token, workspace_id):
@@ -150,15 +167,15 @@ def workspace_picker(store, token, spaces):
     page_header('选择工作方式', '个人工作独立保存；团队协作共享项目，由管理员分配权限。', 'workspace', '工作空间')
     teams = [space for space in spaces if space['kind'] == 'team']
     if not teams:
-        personal, team_entry = st.columns(2, gap='large')
-        with personal:
-            personal_entry(store, token, spaces)
+        team_entry, personal = st.columns([1.618, 1], gap='large')
         with team_entry, st.container(border=True, key='workspace_team_empty'):
             section_title('创建或加入一个团队', '你还没有加入团队。创建团队，或通过邀请码申请加入。', 'analysis')
             choice = st.radio('团队入口', ['创建团队', '加入团队'], horizontal=True)
             team_entry_form(store, token, 'create' if choice == '创建团队' else 'join')
+        with personal:
+            personal_entry(store, token, spaces)
         return
-    team_list, actions = st.columns([3, 1.2], gap='large')
+    team_list, actions = st.columns([1.618, 1], gap='large')
     with team_list:
         section_title('我的团队', f'共 {len(teams)} 个团队，选择团队继续协作。', 'analysis')
         for space in teams:

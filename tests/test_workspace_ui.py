@@ -91,3 +91,22 @@ def test_team_card_enters_existing_space(context):
     assert not app.exception
     assert app.session_state['active_workspace'] == team
     assert store.preferred_space(token) == team
+
+
+def test_team_management_button_opens_and_returns_without_losing_project():
+    app = AppTest.from_string('''
+import streamlit as st
+from sdlc.account_ui import team_navigation
+st.session_state.setdefault('current_project', 'existing-project')
+team_navigation()
+if st.session_state.get('show_team_management'):
+    st.title('团队管理内容')
+else:
+    st.title('项目工作台')
+''').run()
+    assert not app.toggle
+    app.button(key='open_team_management').click().run()
+    assert app.title[0].value == '团队管理内容'
+    app.button(key='close_team_management').click().run()
+    assert app.title[0].value == '项目工作台'
+    assert app.session_state['current_project'] == 'existing-project'
