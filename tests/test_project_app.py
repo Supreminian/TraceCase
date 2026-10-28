@@ -172,7 +172,8 @@ def test_pending_generation_shows_activity_prevents_duplicates_and_recovers(tmp_
     monkeypatch.setattr(jobs, 'submit_initial', lambda service, job: None)
     app.button(key='generate').click().run()
     assert not app.exception
-    assert app.button(key='generate').disabled
+    assert not any(button.key == 'generate' for button in app.button)
+    assert not any(field.key == 'prd_text' for field in app.text_area)
     assert any('任务已提交，等待生成' in item.value for item in app.markdown)
     import sqlite3
     with sqlite3.connect(path) as db:
@@ -180,7 +181,8 @@ def test_pending_generation_shows_activity_prevents_duplicates_and_recovers(tmp_
         db.execute("UPDATE generation_jobs SET status='running' WHERE kind='initial'")
     app.run()
     assert any('AI 正在处理需求' in item.value for item in app.markdown)
-    assert app.button(key='generate').disabled
+    assert not any(button.key == 'generate' for button in app.button)
+    assert not any(field.key == 'prd_text' for field in app.text_area)
     with sqlite3.connect(path) as db:
         db.execute("UPDATE generation_jobs SET status='failed', error='测试生成服务超时' WHERE kind='initial'")
     app.run()
@@ -189,3 +191,12 @@ def test_pending_generation_shows_activity_prevents_duplicates_and_recovers(tmp_
     assert any('测试生成服务超时' in item.value for item in app.error)
     assert app.text_area(key='prd_text').value == text
     assert not any('class="tc-generation"' in item.value for item in app.markdown)
+
+    from tests.fixture_provider import FixtureProvider
+    monkeypatch.setattr(jobs, 'submit_initial', lambda service, job: jobs.execute_initial(service, job, FixtureProvider()))
+    app.button(key='generate').click().run()
+    assert not app.exception
+    assert app.radio(key='page').value == '运行详情与审核'
+    app.radio(key='page').set_value('运行历史').run()
+    assert not app.exception
+    assert not any(button.label == '生成完成，打开结果' for button in app.button)

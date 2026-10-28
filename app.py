@@ -89,47 +89,56 @@ def linked_source_ids(run: dict, content: dict) -> list[str]:
 
 def new_run(service: Service, operator: str) -> None:
     page_header("生成测试用例", "从一份需求开始，生成可追溯、可审核的测试内容。", 'input', '需求输入 / 01')
-    workflow(0)
-    provider = None
-    try:
-        provider = configured_provider()
-    except ValueError:
-        st.warning("生成服务暂不可用，请联系维护者检查连接。需求内容可先保留在本项目草稿中。")
     generating = any(item['status'] in {'queued', 'running'} for item in jobs.initial_jobs(service))
+    workflow(1 if generating else 0)
+    provider = None
+    if not generating:
+        try:
+            provider = configured_provider()
+        except ValueError:
+            st.warning("生成服务暂不可用，请联系维护者检查连接。需求内容可先保留在本项目草稿中。")
+    else:
+        # Retain widget values while the activity view temporarily replaces the inputs.
+        for key in ('prd_text', 'input_source', 'parent_run_id'):
+            if key in st.session_state:
+                st.session_state[key] = st.session_state[key]
+        remember_draft()
     input_col, summary_col = st.columns([2.5, 1], gap="large")
     with input_col:
         with st.container(border=True, key="prd_input"):
-            section_title("需求文档", "直接粘贴或上传 PRD，无需套用模板或预先编号。", 'input')
-            if st.session_state.get("input_source") not in {"粘贴 Markdown", "上传 Markdown"}:
-                st.session_state["input_source"] = "粘贴 Markdown"
-            source = st.radio("输入方式", ["粘贴 Markdown", "上传 Markdown"], horizontal=True, key="input_source")
-            kwargs: dict = {}
-            if source == "粘贴 Markdown":
-                kwargs["text"] = st.text_area("PRD 正文", height=320, key="prd_text", label_visibility="collapsed",
-                                              placeholder="描述产品目标、用户角色、功能流程和业务规则…\n\n缺失或有歧义的条件，会整理为待澄清问题。")
-            else:
-                uploaded = st.file_uploader("选择 Markdown 文件", type=["md", "markdown"], key=f"prd_file_{service.project_id}",
-                                            on_change=upload_changed, args=(service.project_id,))
-                drafts = st.session_state.setdefault("_project_drafts", {}).setdefault(service.project_id, {})
-                if uploaded is not None:
-                    drafts["upload"] = {"filename": uploaded.name, "data": uploaded.getvalue()}
-                if drafts.get("upload"):
-                    kwargs = drafts["upload"]
-                    st.caption("已保留上传草稿：" + kwargs["filename"])
-                    if uploaded is None and st.button("移除保留的上传草稿", key="remove_upload_draft"):
-                        drafts.pop("upload", None)
-                        st.rerun()
-            st.caption("UTF-8 Markdown · 文件最多 100 KiB · 正文最多 20,000 字符")
-            parent = st.session_state.get("parent_run_id", "")
-            if parent:
-                st.info("正在基于上一轮需求创建新版本，原记录会保留。")
-            preview_col, generate_col = st.columns([1, 2])
-            preview = preview_col.button("预览需求", width="stretch")
-            generate = generate_col.button("正在生成，请稍候" if generating else "生成测试用例", type="primary", key="generate", width="stretch",
-                                             disabled=not operator.strip() or provider is None or generating)
-            if not operator.strip():
-                st.caption("登录会话已失效，请重新登录。")
-            st.caption("点击生成会将需求发送至已配置的 AI 服务；必要时自动修复一次，最多两次调用，可能消耗额度。请使用虚构或脱敏数据。")
+            generation_status(service, expected_active=generating)
+            if not generating:
+                section_title("需求文档", "直接粘贴或上传 PRD，无需套用模板或预先编号。", 'input')
+                if st.session_state.get("input_source") not in {"粘贴 Markdown", "上传 Markdown"}:
+                    st.session_state["input_source"] = "粘贴 Markdown"
+                source = st.radio("输入方式", ["粘贴 Markdown", "上传 Markdown"], horizontal=True, key="input_source")
+                kwargs: dict = {}
+                if source == "粘贴 Markdown":
+                    kwargs["text"] = st.text_area("PRD 正文", height=320, key="prd_text", label_visibility="collapsed",
+                                                  placeholder="描述产品目标、用户角色、功能流程和业务规则…\n\n缺失或有歧义的条件，会整理为待澄清问题。")
+                else:
+                    uploaded = st.file_uploader("选择 Markdown 文件", type=["md", "markdown"], key=f"prd_file_{service.project_id}",
+                                                on_change=upload_changed, args=(service.project_id,))
+                    drafts = st.session_state.setdefault("_project_drafts", {}).setdefault(service.project_id, {})
+                    if uploaded is not None:
+                        drafts["upload"] = {"filename": uploaded.name, "data": uploaded.getvalue()}
+                    if drafts.get("upload"):
+                        kwargs = drafts["upload"]
+                        st.caption("已保留上传草稿：" + kwargs["filename"])
+                        if uploaded is None and st.button("移除保留的上传草稿", key="remove_upload_draft"):
+                            drafts.pop("upload", None)
+                            st.rerun()
+                st.caption("UTF-8 Markdown · 文件最多 100 KiB · 正文最多 20,000 字符")
+                parent = st.session_state.get("parent_run_id", "")
+                if parent:
+                    st.info("正在基于上一轮需求创建新版本，原记录会保留。")
+                preview_col, generate_col = st.columns([1, 2])
+                preview = preview_col.button("预览需求", width="stretch")
+                generate = generate_col.button("正在生成，请稍候" if generating else "生成测试用例", type="primary", key="generate", width="stretch",
+                                                 disabled=not operator.strip() or provider is None or generating)
+                if not operator.strip():
+                    st.caption("登录会话已失效，请重新登录。")
+                st.caption("点击生成会将需求发送至已配置的 AI 服务；必要时自动修复一次，最多两次调用，可能消耗额度。请使用虚构或脱敏数据。")
     with summary_col:
         with st.container(border=True, key="generation_summary"):
             section_title("本次会得到什么", "结果按模块展示，生成后由你逐条确认。", 'analysis')
@@ -139,6 +148,8 @@ def new_run(service: Service, operator: str) -> None:
                                   ("待澄清问题", "标出未知条件，不代替你补写规则。")]:
                 st.markdown(f'<div class="tc-output"><strong>{title}</strong><p>{detail}</p></div>', unsafe_allow_html=True)
             st.caption("下一步：核对用例与原文 → 完成人工审核 → 导出批准版本。")
+    if generating:
+        return
     fingerprint = hashlib.sha256(repr(kwargs).encode("utf-8")).hexdigest()
     if preview:
         try:
@@ -681,7 +692,7 @@ def history(service: Service) -> None:
 
 
 @st.fragment(run_every="3s")
-def generation_status(service):
+def generation_status(service, expected_active=None):
     try:
         records = jobs.initial_jobs(service)
         state_key = '_initial_job_states_' + service.project_id
@@ -698,7 +709,9 @@ def generation_status(service):
                     st.session_state['_selected_run'] = item['run_id']
                     st.session_state['_navigate_to'] = PAGES[1]
                     st.rerun(scope='app')
-                label = "生成完成，打开结果" if item['status'] == 'completed' else "生成未完成，查看原因"
+                if item['status'] == 'completed':
+                    continue
+                label = '生成未完成，查看原因'
                 if st.button(label, key='openjob_' + item['id']):
                     st.session_state['_selected_run'] = item['run_id']
                     st.session_state['_navigate_to'] = PAGES[1]
@@ -706,7 +719,8 @@ def generation_status(service):
             elif item['status'] == 'failed':
                 st.error(item['error'] or '生成任务已中断，请重新提交。')
                 st.caption('需求草稿已保留。请检查问题后重新提交，或联系维护者检查生成服务。')
-        if previous is not None and previous != state:
+        active = any(item['status'] in {'queued', 'running'} for item in records)
+        if (previous is not None and previous != state) or (expected_active is not None and expected_active != active):
             st.rerun(scope='app')
     except ValueError as exc:
         st.error(str(exc))
@@ -808,7 +822,8 @@ def main() -> None:
             return
         service = Service(db_path, project_id=project_id, token=token, workspace_id=workspace_id)
         project = service.get_project()
-        generation_status(service)
+        if page != "新建运行":
+            generation_status(service)
         st.session_state["_project_archived"] = project["status"] == "archived" or st.session_state.get("_space_archived", False)
         st.caption("当前项目 / " + project["name"])
         if project["status"] == "archived":
