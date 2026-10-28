@@ -110,7 +110,6 @@ def test_ui_only_exposes_prd_input_and_hides_diagnostic_json(tmp_path, monkeypat
     monkeypatch.setenv('SDLC_DB_PATH', service.db_path)
     app = AppTest.from_file(str(Path('app.py').resolve()), default_timeout=20).run()
     app.selectbox(key='current_project').select(service.project_id).run()
-    app.text_input(key='operator').input('tester').run()
     app.radio(key='page').set_value('新建运行').run()
     assert not any(x.key in {'generation_mode', 'prompt_version', 'sample'} for x in [*app.radio, *app.selectbox])
     assert app.radio(key='input_source').options == ['粘贴 Markdown', '上传 Markdown']

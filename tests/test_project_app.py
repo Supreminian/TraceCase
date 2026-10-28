@@ -13,7 +13,6 @@ def app_for(path, monkeypatch):
     monkeypatch.setenv('SDLC_DB_PATH', str(path))
     app = AppTest.from_file(str(ROOT / 'app.py'), default_timeout=20).run()
     assert not app.exception
-    app.text_input(key='operator').input('project-tester').run()
     return app
 
 
@@ -90,7 +89,7 @@ def test_project_case_navigation_export_and_archive(tmp_path, monkeypatch):
     assert not app.exception
     app.button(key=f"project_export_{saved['id']}").click().run()
     assert not app.exception
-    assert app.get('download_button')
+    assert app.get('link_button')
     app.radio(key='page').set_value('项目列表').run()
     app.button(key='archive_project').click().run()
     assert not app.exception

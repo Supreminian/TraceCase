@@ -2,6 +2,7 @@
 import streamlit as st
 
 from sdlc.service import ServiceError
+from sdlc.account_ui import download_link
 from sdlc.ui import format_time, page_header, section_title
 
 
@@ -50,11 +51,11 @@ def projects_view(admin, operator):
     page_header('项目列表', '按项目组织需求、用例与审核记录，从这里开始新的测试工作。', 'workspace', '项目管理')
     section_title('创建项目', '为一组独立需求建立专属工作空间。', 'workspace')
     if not operator.strip():
-        st.caption('请在左上角导航菜单填写操作者标识，之后即可创建或修改项目。')
+        st.caption('登录会话已失效，请重新登录后操作。')
     with st.form('create_project'):
         name = st.text_input('项目名称', key='new_project_name', max_chars=80)
         description = st.text_area('项目简介', key='new_project_description', max_chars=500)
-        submitted = st.form_submit_button('新建项目', disabled=not operator.strip(), type='primary')
+        submitted = st.form_submit_button('新建项目', disabled=not operator.strip() or 'generate' not in admin.user['permissions'], type='primary')
     if submitted:
         try:
             project_id = admin.create_project(name, description, operator)
@@ -66,7 +67,7 @@ def projects_view(admin, operator):
     projects = admin.list_projects(limit=25, offset=(page - 1) * 25)
     st.caption('每页最多 25 个项目；归档项目也保留在列表中。')
     if not projects:
-        st.info('还没有项目。填写操作者标识并新建项目，即可生成和管理该项目的测试用例。')
+        st.info('此空间还没有项目。有生成权限的成员可新建项目，再输入需求生成测试用例。')
         return
     for p in projects:
         with st.container(border=True):
@@ -84,7 +85,7 @@ def projects_view(admin, operator):
             with st.form(f"edit_project_{selected}_{project['revision']}"):
                 name = st.text_input('修改项目名称', value=project['name'], max_chars=80)
                 description = st.text_area('修改项目简介', value=project['description'], max_chars=500)
-                submitted = st.form_submit_button('保存项目信息', disabled=not operator.strip())
+                submitted = st.form_submit_button('保存项目信息', disabled=not operator.strip() or 'edit' not in admin.user['permissions'])
             if submitted:
                 try:
                     admin.update_project(selected, name, description, operator, project['revision'])
@@ -93,7 +94,7 @@ def projects_view(admin, operator):
                 except (ServiceError, ValueError) as error:
                     st.error(str(error))
         if st.button('恢复项目' if project['status'] == 'archived' else '归档项目', key='archive_project',
-                     disabled=not operator.strip()):
+                     disabled=not operator.strip() or 'manage' not in admin.user['permissions']):
             try:
                 admin.set_project_archived(selected, project['status'] != 'archived', operator, project['revision'])
                 st.session_state['_notice'] = '项目状态已更新。归档项目可查阅和下载已有快照。'
@@ -188,5 +189,4 @@ def export_history(service):
                 data = service.get_export(item['id'])
                 st.session_state['_project_ready_export'] = data
             if data:
-                st.download_button('下载此快照', data['content'], file_name=data['filename'],
-                                   mime=data['mime'], key=f"download_project_{item['id']}")
+                download_link(service, data, '下载此快照')

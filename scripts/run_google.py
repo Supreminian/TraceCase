@@ -18,8 +18,7 @@ def main():
         os.environ['GEMINI_API_KEY'] = result.stdout.decode().strip()
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
-    os.execv(sys.executable, [sys.executable, '-m', 'streamlit', 'run', str(root / 'app.py'),
-                             '--server.port', '8501', *sys.argv[1:]])
+    os.execv(sys.executable, [sys.executable, str(root / 'scripts' / 'run_local.py'), *sys.argv[1:]])
 
 
 if __name__ == '__main__':

@@ -98,6 +98,9 @@ class Service:
             return fingerprint, json.loads(row["result_json"])
         return fingerprint, None
 
+    def _cached_request(self, db, request_id):
+        return db.execute('SELECT result_json FROM requests WHERE id=?', (request_id,)).fetchone()
+
     def _remember(self, db, request_id, fingerprint, result):
         db.execute("INSERT INTO requests VALUES (?,?,?)", (request_id, fingerprint, dumps(result)))
 
@@ -290,6 +293,8 @@ class Service:
                         feedback.append({**dict(event), "case_id": c["case_id"], "version": c["version"]})
                 prompt = build_review_prompt(prepared["paragraphs"], revision_snapshot, feedback,
                                              {"run_id": parent_run_id, "revision": review_source_revision})
+            if hasattr(self, "_admit_generation") and not local_revalidation:
+                self._admit_generation(db)
             db.execute("""INSERT INTO runs
                 (id,parent_run_id,project_id,created_at,operator,status,input_json,config_json,prompt_json)
                 VALUES (?,?,?,?,?,?,?,?,?)""", (run_id, parent_run_id, self.project_id, now(), operator,
@@ -321,6 +326,8 @@ class Service:
                            (message, elapsed, elapsed, run_id))
                 self._event(db, run_id, "generation_failed", operator, message)
             return run_id
+        if hasattr(self, "_capture_response"):
+            self._capture_response(run_id, response, latency)
         validation = validate_output(response.raw_output, prepared["paragraphs"])
         finish_reason = response.metadata.get("finish_reason")
         if finish_reason in {"length", "content_filter", "tool_calls"}:
@@ -407,7 +414,7 @@ class Service:
             return run_id
         repair_id = request_id + ':auto-repair'
         with self.connection() as db:
-            cached = db.execute('SELECT result_json FROM requests WHERE id=?', (repair_id,)).fetchone()
+            cached = self._cached_request(db, repair_id)
         if cached:
             child_id = json.loads(cached['result_json'])
             self.get_run(child_id)  # Enforce project scope on reused requests.
@@ -417,7 +424,7 @@ class Service:
         except ServiceError:
             # A concurrent identical request may already have created the repair child.
             with self.connection() as db:
-                cached = db.execute('SELECT result_json FROM requests WHERE id=?', (repair_id,)).fetchone()
+                cached = self._cached_request(db, repair_id)
             if cached:
                 child_id = json.loads(cached['result_json'])
                 self.get_run(child_id)

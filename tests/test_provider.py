@@ -119,7 +119,6 @@ def test_ui_disables_unconfigured_model(tmp_path, monkeypatch):
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py')).run()
     app.selectbox(key='current_project').select(service.project_id).run()
     app.radio(key='page').set_value('新建运行').run()
-    app.text_input(key='operator').input('tester').run()
     assert not app.exception
     assert app.button(key='generate').disabled
     assert app.warning

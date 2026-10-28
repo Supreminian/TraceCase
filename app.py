@@ -13,7 +13,10 @@ import streamlit as st
 
 from sdlc.domain import coverage_report, prepare_input, validate_output
 from sdlc.providers import configured_provider
-from sdlc.service import Service, ServiceError
+from sdlc.service import ServiceError
+from sdlc.secure_service import Service
+from sdlc.account_ui import enter, download_link
+from sdlc import jobs
 from sdlc.ui import apply_style, page_header, section_title, workflow
 from sdlc.project_ui import project_changed, projects_view, overview, project_cases, export_history, remember_draft, upload_changed
 
@@ -124,7 +127,7 @@ def new_run(service: Service, operator: str) -> None:
             generate = generate_col.button("生成测试用例", type="primary", key="generate", width="stretch",
                                              disabled=not operator.strip() or provider is None)
             if not operator.strip():
-                st.caption("请先在左上角导航菜单填写操作者标识。")
+                st.caption("登录会话已失效，请重新登录。")
             st.caption("点击生成会将需求发送至已配置的 AI 服务；必要时自动修复一次，最多两次调用，可能消耗额度。请使用虚构或脱敏数据。")
     with summary_col:
         with st.container(border=True, key="generation_summary"):
@@ -149,11 +152,11 @@ def new_run(service: Service, operator: str) -> None:
     remember_draft()
     if generate:
         try:
-            with st.spinner("正在分析需求并生成用例，请稍候…"):
-                run_id = service.generate_from_prd(**kwargs, operator=operator,
-                                                  parent_run_id=parent.strip() or None,
-                                                  request_id=request_id(), provider=provider)
-            go_to(PAGES[1], run_id)
+            job_id = jobs.enqueue_initial(service, **kwargs, parent_run_id=parent.strip() or None)
+            jobs.submit_initial(service, job_id)
+            st.session_state["_await_initial_job"] = job_id
+            st.session_state['_notice'] = '任务已提交，正在后台分析需求。可以继续浏览项目。'
+            st.rerun()
         except (ServiceError, ValueError) as error:
             display_error(error)
 
@@ -177,6 +180,7 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
     if not cases:
         st.info("当前运行没有可审核用例。请查看校验与原始输出。")
         return
+    revision_jobs(service, run["id"])
     mapping = {case["case_id"]: case for case in cases}
     selector_key = f"case_selector_{run['id']}"
     jump = st.session_state.get("_review_next")
@@ -230,11 +234,17 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
             else:
                 reason = approval_note
                 st.caption("无需填写文字；提交后记录所选说明，并进入下一个待审核用例。")
-            submitted = st.form_submit_button("提交审核", type="primary", disabled=not operator.strip() or st.session_state.get("_project_archived", False))
+            submitted = st.form_submit_button("提交审核", type="primary", disabled=not operator.strip() or st.session_state.get("_project_archived", False) or "review" not in service.user["permissions"])
     if submitted:
         try:
             service.review(run["id"], case_id, case["version"], case["revision"],
                            "approve" if action == "通过" else "return", operator, reason, request_id())
+            if action == "退回" and "regenerate" in service.user["permissions"]:
+                try:
+                    job_id = jobs.enqueue(service, run["id"], case_id)
+                    jobs.submit(service, job_id)
+                except ValueError as exc:
+                    st.session_state["_job_notice"] = str(exc)
             current_cases = {c["case_id"]: c for c in service.get_run(run["id"])["cases"]}
             ids = list(mapping)
             index = ids.index(case_id)
@@ -267,7 +277,7 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
                                     index=category_options.index(content["category"]),
                                     format_func=lambda item: CATEGORY.get(item, item))
             edit_reason = st.text_area("修改理由", key=f"edit_reason_{token}")
-            edit_submitted = st.form_submit_button("保存修订（生成新版本）", disabled=not operator.strip() or st.session_state.get("_project_archived", False))
+            edit_submitted = st.form_submit_button("保存修订（生成新版本）", disabled=not operator.strip() or st.session_state.get("_project_archived", False) or "edit" not in service.user["permissions"])
         if edit_submitted:
             updated = copy.deepcopy(content)
             updated.update(title=title, requirement_ids=requirements, paragraph_ids=paragraphs,
@@ -320,7 +330,7 @@ def clarifications_tab(service: Service, run: dict, operator: str) -> None:
                 resolution = st.radio("处理结论", ["原文已明确，属于误报", "不影响执行和判断，可认定非阻断"])
                 evidence = st.multiselect("支持结论的来源段落", paragraphs)
                 reason = st.text_area("处理理由", placeholder="说明原文如何支持结论，不能在此新增业务规则。")
-                submitted = st.form_submit_button("保存澄清处理", disabled=not operator.strip() or st.session_state.get("_project_archived", False))
+                submitted = st.form_submit_button("保存澄清处理", disabled=not operator.strip() or st.session_state.get("_project_archived", False) or "review" not in service.user["permissions"])
             if submitted:
                 try:
                     service.resolve_clarification(run["id"], selected, run["revision"],
@@ -339,7 +349,7 @@ def clarifications_tab(service: Service, run: dict, operator: str) -> None:
             scope = st.radio("影响范围", ["整次运行", "指定用例"], horizontal=True)
             case_ids = st.multiselect("受影响用例", cases)
             reason = st.text_area("新增理由")
-            submitted = st.form_submit_button("记录阻断问题", disabled=not operator.strip() or st.session_state.get("_project_archived", False))
+            submitted = st.form_submit_button("记录阻断问题", disabled=not operator.strip() or st.session_state.get("_project_archived", False) or "review" not in service.user["permissions"])
         if submitted:
             content = {"id": "CL-H" + uuid4().hex[:8].upper(), "question": question,
                        "paragraph_ids": source_ids, "requirement_ids": requirement_ids,
@@ -355,6 +365,8 @@ def clarifications_tab(service: Service, run: dict, operator: str) -> None:
 
 def exports_view(service: Service, run: dict, operator: str, blockers: list[str]) -> None:
     section_title("批准版本导出", "只导出当前已通过人工审核的版本，下载文件保留固定快照。", "export")
+    if "export" not in service.user["permissions"]:
+        st.info("当前角色没有生成或下载批准文件的权限，请联系团队管理员。")
     if blockers:
         st.warning("尚未满足导出条件，请先完成用例审核并处理阻断问题。")
         with st.expander("查看尚未完成的事项", expanded=False):
@@ -368,7 +380,7 @@ def exports_view(service: Service, run: dict, operator: str, blockers: list[str]
     col1, col2 = st.columns([1, 2])
     format_name = col1.selectbox("导出格式", ["CSV", "Markdown"], key=f"format_{run['id']}")
     if col2.button("生成批准版本文件", type="primary", key="export_approved",
-                   disabled=bool(blockers) or not operator.strip() or st.session_state.get("_project_archived", False), width="stretch"):
+                   disabled=bool(blockers) or not operator.strip() or st.session_state.get("_project_archived", False) or "export" not in service.user["permissions"], width="stretch"):
         try:
             exported = service.export(run["id"], "csv" if format_name == "CSV" else "md", operator,
                                       run["revision"], request_id())
@@ -379,8 +391,7 @@ def exports_view(service: Service, run: dict, operator: str, blockers: list[str]
     ready = st.session_state.get("ready_export")
     if ready and ready["run_id"] == run["id"]:
         exported = ready["export"]
-        st.download_button("下载已保存的导出快照", exported["content"],
-                           file_name=exported["filename"], mime=exported["mime"])
+        download_link(service, exported, "下载已保存的导出快照")
         st.caption("历史快照：之后的修订不会改变这份文件，当前版本仍须独立满足导出条件。")
 
 
@@ -423,29 +434,12 @@ def review_result(service: Service, run: dict, operator: str, blockers: list[str
     selected = st.selectbox("选择要人工修订的退回用例", [c["case_id"] for c in returned],
                             key=f"manual_returned_{run['id']}")
     st.caption("保存为新版本并重新审核；本运行中未改动用例的批准记录仍有效。")
-    if st.button("人工修订此用例", key="manual_revision", disabled=not operator.strip() or st.session_state.get("_project_archived", False)):
+    if st.button("人工修订此用例", key="manual_revision", disabled=not operator.strip() or st.session_state.get("_project_archived", False) or "edit" not in service.user["permissions"]):
         st.session_state["_review_next"] = {"run_id": run["id"], "case_id": selected}
         st.session_state["_expand_edit"] = {"run_id": run["id"], "case_id": selected}
         st.session_state["_detail_target"] = {"run_id": run["id"], "tab": "用例审核"}
         st.rerun()
-    st.subheader("方式二：模型修订")
-    st.caption("发送原 PRD、当前用例及退回理由。只允许修改退回用例；新运行保留来源快照，全部用例重新待审，不继承批准。")
-    provider = None
-    try:
-        provider = configured_provider()
-    except ValueError:
-        st.info("生成服务暂不可用，请联系维护者检查连接。")
-    confirmed = st.checkbox("确认发送本轮需求、用例和退回理由进行 AI 修订，可能消耗调用额度",
-                            key=f"revision_confirm_{run['id']}")
-    if st.button("提交模型修订并开始下一轮", key="model_revision",
-                 disabled=provider is None or not confirmed or not operator.strip() or st.session_state.get("_project_archived", False)):
-        try:
-            with st.spinner("根据退回意见修订，结果将重新校验…"):
-                child = service.revise_returned(run["id"], run["revision"], operator, provider, request_id())
-            st.session_state["_notice"] = "修订结果已保存为关联新运行。请检查校验结果并重新逐条审核；原运行保留。"
-            go_to(PAGES[1], child)
-        except (ServiceError, ValueError) as error:
-            display_error(error)
+    st.info("退回后会在后台逐条重新生成。新版本需再次审核，其他已通过用例保持不变。任务状态与重试入口在用例审核页上方。")
 
 
 def validation_repair(service: Service, run: dict, operator: str) -> None:
@@ -525,7 +519,7 @@ def detail(service: Service, operator: str) -> None:
     run_id = st.selectbox("选择生成批次", ids, key="selected_run", format_func=run_labels.__getitem__)
     remember_draft()
     run = service.get_run(run_id)
-    st.caption(f"创建于 {local_time(run['created_at'])} · 发起人 {run['operator']}")
+    st.caption(f"创建于 {local_time(run['created_at'])} · 发起人 {run.get('operator_display', run['operator'])}")
     if run.get("parent_run_id") and st.button("查看上一轮", key="return_parent"):
         go_to(PAGES[1], run["parent_run_id"])
     if run["prompt"].get("version") == "REVIEW-R1":
@@ -547,7 +541,7 @@ def detail(service: Service, operator: str) -> None:
     cols[1].metric("已通过", sum(c["status"] == "approved" for c in cases))
     cols[2].metric("待审核", sum(c["status"] == "pending_review" for c in cases))
     cols[3].metric("已退回", sum(c["status"] == "returned" for c in cases))
-    if st.button("基于本次输入创建关联新运行", key="create_child", disabled=st.session_state.get("_project_archived", False)):
+    if st.button("基于本次输入创建关联新运行", key="create_child", disabled=st.session_state.get("_project_archived", False) or "generate" not in service.user["permissions"]):
         document = run["input"]
         st.session_state["_draft"] = document.get("normalized_text", document.get("text", ""))
         st.session_state["_parent"] = run_id
@@ -628,7 +622,7 @@ def detail(service: Service, operator: str) -> None:
         for event in reversed(run.get("events", [])):
             with st.container(border=True):
                 st.markdown("**" + action_names.get(event["action"], "更新记录") + "**")
-                st.caption(f"{local_time(event['created_at'])} · {event['operator']}")
+                st.caption(f"{local_time(event['created_at'])} · {event.get('operator_display', event['operator'])}")
                 st.text(event["reason"])
         with st.expander("查看原始输出 JSON", expanded=False):
             raw = run.get("raw_output")
@@ -685,6 +679,72 @@ def history(service: Service) -> None:
         go_to(PAGES[1], selected)
 
 
+@st.fragment(run_every="3s")
+def generation_status(service):
+    try:
+        records = jobs.initial_jobs(service)
+        for item in records:
+            if item['status'] in {'queued', 'running'}:
+                st.info("正在后台分析 PRD 并生成测试用例，可继续浏览其他页面。")
+            elif item['run_id']:
+                if st.session_state.get('_await_initial_job') == item['id'] and st.session_state.get('page') == '新建运行':
+                    st.session_state.pop('_await_initial_job', None)
+                    st.session_state['_selected_run'] = item['run_id']
+                    st.session_state['_navigate_to'] = PAGES[1]
+                    st.rerun(scope='app')
+                label = "生成完成，打开结果" if item['status'] == 'completed' else "生成未完成，查看原因"
+                if st.button(label, key='openjob_' + item['id']):
+                    st.session_state['_selected_run'] = item['run_id']
+                    st.session_state['_navigate_to'] = PAGES[1]
+                    st.rerun(scope='app')
+            elif item['status'] == 'failed':
+                st.warning(item['error'] or '生成任务已中断，请重新提交。')
+    except ValueError as exc:
+        st.error(str(exc))
+
+
+@st.fragment(run_every="3s")
+def revision_jobs(service, run_id):
+    try:
+        records = jobs.list_jobs(service, run_id)
+        current_cases = {c['case_id']: c for c in service.get_run(run_id)['cases']}
+        latest = {}
+        for item in records:
+            latest.setdefault(item['case_id'], item)
+        for item in latest.values():
+            label = {'queued': '等待重新生成', 'running': '正在重新生成', 'completed': '新版本已就绪，请重新审核',
+                     'failed': '重新生成失败', 'conflict': '用例已被修改，模型结果未覆盖新版本'}.get(item['status'], item['status'])
+            current = current_cases.get(item['case_id'])
+            if item['status'] == 'completed' and current and current['status'] != 'pending_review':
+                label = '修订已完成，当前版本' + STATUS.get(current['status'], current['status'])
+            st.caption(item['case_id'] + ' · ' + label)
+            if item['status'] == 'completed' and current and current['status'] == 'pending_review':
+                if st.button('审核新版本 ' + item['case_id'], key='reviewjob_' + item['id']):
+                    st.session_state['_review_next'] = {'run_id': run_id, 'case_id': item['case_id']}
+                    st.session_state['_detail_target'] = {'run_id': run_id, 'tab': '用例审核'}
+                    st.rerun(scope='app')
+            if item['error']:
+                st.warning(item['error'])
+        state = tuple((r['id'], r['status']) for r in records)
+        key = '_job_states_' + run_id
+        before = st.session_state.get(key)
+        st.session_state[key] = state
+        if before is not None and before != state:
+            st.rerun(scope='app')
+        if '_job_notice' in st.session_state:
+            st.warning(st.session_state.pop('_job_notice'))
+        if 'regenerate' in service.user['permissions']:
+            returned = [c for c in current_cases.values() if c['status'] == 'returned'
+                        and latest.get(c['case_id'], {}).get('status') not in {'queued', 'running'}]
+            for case in returned:
+                if st.button('重新生成 ' + case['case_id'], key='retrycase_' + run_id + case['case_id']):
+                    job_id = jobs.enqueue(service, run_id, case['case_id'])
+                    jobs.submit(service, job_id)
+                    st.rerun(scope='app')
+    except ValueError as exc:
+        st.error(str(exc))
+
+
 def main() -> None:
     st.set_page_config(page_title="TraceCase · 需求与测试复核", page_icon="🧭", layout="wide",
                        initial_sidebar_state="collapsed")
@@ -699,7 +759,8 @@ def main() -> None:
         st.session_state["input_source"] = "粘贴 Markdown"
     try:
         db_path = os.environ.get("SDLC_DB_PATH", str(ROOT / "data" / "sdlc.sqlite3"))
-        admin = Service(db_path)
+        token, workspace_id, user = enter(db_path)
+        admin = Service(db_path, token=token, workspace_id=workspace_id)
         projects = admin.list_projects()
         desired = st.session_state.get("_switch_project", st.session_state.get("current_project"))
         if desired and desired not in {p["id"] for p in projects}:
@@ -720,30 +781,32 @@ def main() -> None:
                                      placeholder="请选择项目", on_change=project_changed,
                                      format_func=lambda pid: next(p["name"] + ("（已归档）" if p["status"] == "archived" else "")
                                                                   for p in projects if p["id"] == pid))
-            page = st.radio("工作空间", PAGES, key="page")
+            page = st.radio("项目功能", PAGES, key="page")
             st.divider()
-            operator = st.text_input("当前操作者", key="operator", max_chars=64,
-                                     placeholder="填写姓名或工作标识", help="用于记录审核与修改，自报标识不等同于登录认证。")
-            st.caption("操作会保留记录，便于团队核对。")
+            operator = user['id']
+            st.caption("操作记录关联当前登录账号。")
         if "_notice" in st.session_state:
             st.success(st.session_state.pop("_notice"))
         if page == "项目列表" or not project_id:
             st.session_state["_project_archived"] = False
             projects_view(admin, operator)
             return
-        service = Service(db_path, project_id=project_id)
+        service = Service(db_path, project_id=project_id, token=token, workspace_id=workspace_id)
         project = service.get_project()
-        st.session_state["_project_archived"] = project["status"] == "archived"
+        generation_status(service)
+        st.session_state["_project_archived"] = project["status"] == "archived" or st.session_state.get("_space_archived", False)
         st.caption("当前项目 / " + project["name"])
         if project["status"] == "archived":
             st.warning("此项目已归档，只能查看与下载已有快照；请在项目列表恢复后继续处理。")
         if page == "新建运行":
-            if project["status"] == "active":
+            if project["status"] == "active" and "generate" in service.user["permissions"]:
                 draft = st.session_state.get("_project_drafts", {}).get(project_id, {})
                 for key in ("prd_text", "parent_run_id", "input_source"):
                     if key in draft:
                         st.session_state.setdefault(key, draft[key])
                 new_run(service, operator)
+            else:
+                st.info("当前角色没有创建与生成权限，请联系团队管理员。")
         elif page == "运行详情与审核":
             detail(service, operator)
         elif page == "运行历史":
@@ -751,7 +814,10 @@ def main() -> None:
         elif page == "项目用例":
             project_cases(service, go_to)
         elif page == "导出记录":
-            export_history(service)
+            if "export" in service.user["permissions"]:
+                export_history(service)
+            else:
+                st.info("当前角色没有导出权限。")
         else:
             overview(service, go_to)
     except (ServiceError, ValueError) as error:

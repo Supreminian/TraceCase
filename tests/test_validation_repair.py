@@ -92,7 +92,6 @@ def test_ui_repair_requires_confirmation_and_navigates_to_child(tmp_path, monkey
     monkeypatch.setattr('sdlc.providers.GeminiProvider', lambda: provider)
     app = AppTest.from_file(str(Path('app.py').resolve())).run()
     app.selectbox(key='current_project').select(service.project_id).run()
-    app.text_input(key='operator').input('tester').run()
     app.radio(key='page').set_value('运行详情与审核').run()
     assert not app.exception
     assert app.button(key='repair_validation').disabled
@@ -147,7 +146,6 @@ def test_ui_can_revalidate_locally_without_key_or_model_confirmation(tmp_path, m
         monkeypatch.delenv(name, raising=False)
     app = AppTest.from_file(str(Path('app.py').resolve())).run()
     app.selectbox(key='current_project').select(service.project_id).run()
-    app.text_input(key='operator').input('tester').run()
     app.radio(key='page').set_value('运行详情与审核').run()
     assert not app.button(key='local_revalidate').disabled
     app.button(key='local_revalidate').click().run()

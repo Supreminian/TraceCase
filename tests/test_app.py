@@ -30,7 +30,6 @@ def workspace(tmp_path, monkeypatch):
     assert_clean(app)
     app.selectbox(key="current_project").select(service.project_id).run()
     app.radio(key="page").set_value("新建运行").run()
-    app.text_input(key="operator").input("demo-reviewer").run()
     return app, service
 
 
@@ -114,11 +113,9 @@ def test_ui_ambiguous_case_cannot_be_approved_or_exported(workspace):
     assert refreshed["exports"] == []
 
 
-def test_ui_requires_operator_and_retains_failed_generation(workspace):
+def test_ui_uses_authenticated_actor_and_retains_failed_generation(workspace):
     app, service = workspace
-    app.text_input(key="operator").input("").run()
-    assert app.button(key="generate").disabled
-    app.text_input(key="operator").input("demo-reviewer").run()
+    assert not any(x.key == "operator" for x in app.text_input)
     app.radio(key="input_source").set_value("粘贴 Markdown").run()
     app.text_area(key="prd_text").input("# 自定义虚构输入\n\n原型尚未接入实际模型。")
     app.button(key="generate").click().run()
@@ -183,24 +180,16 @@ def test_completed_returned_review_shows_next_actions_and_manual_revision(worksp
     assert app.session_state[f"detail_tabs_{run['id']}"] == "用例审核"
 
 
-def test_model_revision_ui_starts_linked_review_without_inheriting_approval(workspace, monkeypatch):
-    from tests.test_review_iteration import RevisionProvider
+def test_model_revision_ui_offers_targeted_retry(workspace):
     app, service = workspace
     run = generate(app, service)
-    monkeypatch.setattr("sdlc.providers.GeminiProvider", RevisionProvider)
-    for index, c in enumerate(run["cases"]):
-        service.review(run["id"], c["case_id"], c["version"], c["revision"],
-                       "return" if index == 0 else "approve", "tester", "明确步骤角色", f"review-{index}")
+    case = run['cases'][0]
+    service.review(run['id'], case['case_id'], case['version'], case['revision'],
+                   'return', 'tester', '明确步骤角色', 'return-test')
     app.run()
-    app.checkbox(key=f"revision_confirm_{run['id']}").check().run()
-    app.button(key="model_revision").click().run()
     assert_clean(app)
-    assert not app.error
-    child_id = app.selectbox(key="selected_run").value
-    assert child_id != run["id"]
-    child = service.get_run(child_id)
-    assert child["parent_run_id"] == run["id"] and child["status"] == "valid"
-    assert all(c["status"] == "pending_review" for c in child["cases"])
+    assert any(b.key == 'retrycase_' + run['id'] + case['case_id'] for b in app.button)
+    assert not any(b.key == 'model_revision' for b in app.button)
 
 
 def test_quick_approval_records_selected_note_without_text(workspace):
