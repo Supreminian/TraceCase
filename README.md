@@ -2,12 +2,14 @@
 
 输入产品需求文档，提取功能、角色、业务规则和待澄清问题，生成有来源引用的测试用例，人工审核后导出 CSV / Markdown。支持不同业务领域，不要求 PRD 使用固定模板或自行编写段落编号。
 
+界面用独立卡片、模块色与步骤导航区分需求输入、分析结果、澄清、人工审核和批准导出；当前操作者与项目切换放在侧栏。模型选择、地址及参数在后台配置，不占用用户操作流程。
+
 ## 使用流程
 
 1. 创建或选择项目，填写操作者标识，进入“新建运行”。
 2. 粘贴 Markdown 或上传 UTF-8 `.md` / `.markdown` 文件，点击“生成测试用例”。
 3. 系统使用唯一的通用需求 Prompt 分析 PRD、生成用例并校验。可计算的澄清状态自动整理；格式或引用仍有错误时最多自动修复一次，无需用户再次点击。原调用与修复调用分别留存，不循环重试。
-4. 页面展示用例、功能、角色、规则和澄清问题。JSON、模型配置及原始响应默认折叠，点击查看才展开。
+4. 页面展示用例、功能、角色、规则和澄清问题。JSON 与原始响应默认折叠；模型配置由维护者管理，不出现在用户页面。
 5. 逐条通过、退回或修改。通过说明可快速选择，退回需填写原因；提交后跳到下一条待审核用例。
 6. 全部满足审批条件后导出批准快照；存在退回时可人工修订或将意见送入模型创建下一轮。
 
@@ -27,7 +29,7 @@ export GEMINI_API_KEY='在本机设置，不要提交 Git'
 本机已有 SummerTheCat 的 Gemini 钥匙串凭据时，可使用 `.venv/bin/python scripts/run_google.py` 启动。凭据只读入进程环境，不复制到项目文件。应用地址为 `http://127.0.0.1:8501`。
 
 - Google：`GEMINI_API_KEY`（或 `GOOGLE_API_KEY`），`GEMINI_MODEL` 指定模型。
-- 兼容接口：在页面选择“其他兼容接口”，配置 `SDLC_MODEL_URL`（完整 Chat Completions 地址）、`SDLC_MODEL_NAME`、`SDLC_MODEL_API_KEY`。服务层默认需要兼容接口时设置 `SDLC_MODEL_PROVIDER=compatible`。
+- 兼容接口：由维护者设置 `SDLC_MODEL_PROVIDER=compatible`，并配置 `SDLC_MODEL_URL`（完整 Chat Completions 地址）、`SDLC_MODEL_NAME`、`SDLC_MODEL_API_KEY`。服务层默认需要兼容接口时设置 `SDLC_MODEL_PROVIDER=compatible`。
 - `SDLC_MODEL_TIMEOUT` 默认 180 秒，可设 1–300 秒；`SDLC_MODEL_MAX_TOKENS` 默认 32768，可设 128–32768，仍受服务端上限约束。
 - `SDLC_DB_PATH` 默认 `data/sdlc.sqlite3`。应用读取环境变量，不自动加载 `.env` 文件，`.env.example` 仅供配置参考。
 
