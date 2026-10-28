@@ -51,7 +51,7 @@ def apply_style():
     .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button) {
       display:flex; justify-content:flex-start; width:100%; min-height:44px;
       padding:10px 12px; border:0; border-radius:10px; background:transparent;
-      color:var(--tc-ink); box-shadow:none; font-size:14px; font-weight:600; text-align:left; }
+      color:var(--tc-ink); box-shadow:none; font-size:14px; font-weight:600; text-align:left; text-decoration:none; }
     .stApp [data-testid="stSidebar"] .st-key-workspace_navigation :is(button,a,.tc-logout-button):hover {
       background:#e1e8f2; color:var(--tc-ink); border:0; }
     .stApp [data-testid="stSidebar"] .st-key-workspace_navigation [data-testid="stBaseButton-primary"],
@@ -127,10 +127,10 @@ def apply_style():
     .st-key-clarification_workspace { border-top:3px solid #b77910!important; }
     .st-key-review_result_workspace { border-top:3px solid #0f766e!important; }
     .tc-eyebrow { font-size:11px; font-weight:750; letter-spacing:.12em; margin-bottom:4px; }
-    .tc-profile-entry { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--tc-ink); margin-bottom:12px; }
+    .tc-profile-entry { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--tc-ink); margin:0; }
     .tc-profile-entry:hover { text-decoration:none; }
-    .tc-profile-entry .tc-avatar { width:44px; height:44px; border-radius:50%; object-fit:cover; border:2px solid white; }
-    .tc-profile-entry strong { display:block; color:var(--tc-ink); font-size:14px; }
+    .tc-profile-entry .tc-avatar { width:24px; height:24px; border-radius:50%; object-fit:cover; flex-shrink:0; }
+    .tc-profile-entry strong { display:block; color:var(--tc-ink); font-size:14px; font-weight:600; overflow-wrap:anywhere; }
     .tc-profile-entry small { color:var(--tc-muted); font-size:11px; }
     .tc-brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
     .tc-logo { background:#1e3455; color:#fff; padding:10px; border-radius:11px; font-weight:800; letter-spacing:-1px; }

@@ -26,8 +26,12 @@ p { margin-bottom:16px; }
 .tc-user { border-top:1px solid var(--tc-line); padding-top:20px; margin-top:24px; overflow-wrap:anywhere; }
 .tc-avatar { width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid white; background:#dbe7fc; }
 .tc-avatar.large { width:112px; height:112px; margin-bottom:16px; }
-.tc-profile-entry { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--tc-ink); }
-.tc-profile-entry strong { display:block; } .tc-profile-entry small { color:var(--tc-muted); }
+.tc-profile-entry { display:flex; align-items:center; gap:12px; padding:10px 12px; min-height:44px;
+ border-radius:10px; text-decoration:none; color:var(--tc-ink); }
+.tc-profile-entry:hover { background:#e1e8f2; }
+.tc-profile-entry:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+.tc-profile-entry .tc-avatar { width:24px; height:24px; flex-shrink:0; border:0; }
+.tc-profile-entry strong { display:block; font-size:14px; font-weight:600; overflow-wrap:anywhere; } .tc-profile-entry small { color:var(--tc-muted); }
 .tc-user small { display:block; color:var(--tc-muted); margin-bottom:6px; }
 .tc-user form { margin-top:18px; }
 .tc-main { width:100%; max-width:1160px; padding:48px 40px 64px; margin:0 auto; }
@@ -115,7 +119,7 @@ def render(title, description, body, *, user=None, token=None, active='', accent
             current = ' aria-current="page"' if active == key else ''
             nav += f'<a href="{path}"{current}>{label}</a>'
         logout = '<form method="post" action="/auth/logout"><input type="hidden" name="logout_proof" value="' + logout_proof(token) + '"><button class="tc-button secondary">退出登录</button></form>'
-        sidebar = '<aside class="tc-sidebar">' + brand + '<nav class="tc-nav" aria-label="账号导航">' + nav + '</nav><div class="tc-user"><small>当前账号</small>' + user_identity(user) + logout + '</div></aside>'
+        sidebar = '<aside class="tc-sidebar">' + brand + '<nav class="tc-nav" aria-label="账号导航">' + nav + '</nav><div class="tc-user">' + logout + user_identity(user) + '</div></aside>'
         content = '<div class="tc-layout">' + sidebar + '<main class="tc-main">' + hero + body + '</main></div>'
     else:
         content = '<main class="tc-main guest"><div class="tc-guest-brand">' + brand + '</div>' + hero + body + '</main>'
@@ -127,6 +131,6 @@ def render(title, description, body, *, user=None, token=None, active='', accent
 
 
 def user_identity(user):
-    return ('<a class="tc-profile-entry" href="/auth/profile" target="_self" aria-label="查看个人资料">'
+    return ('<a class="tc-profile-entry" href="/auth/profile" target="_self" aria-label="查看个人资料" title="个人资料">'
             '<img class="tc-avatar" src="/auth/avatar" alt="我的头像">'
-            '<span><strong>' + escape(user['display_name']) + '</strong><small>查看个人资料</small></span></a>')
+            '<span><strong>' + escape(user['display_name']) + '</strong></span></a>')
