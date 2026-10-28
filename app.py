@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from sdlc.domain import prepare_input
+from sdlc.domain import coverage_report, prepare_input, validate_output
 from sdlc.providers import CompatibleProvider, GeminiProvider
 from sdlc.service import Service, ServiceError
 from sdlc.project_ui import project_changed, projects_view, overview, project_cases, export_history, remember_draft, upload_changed
@@ -169,6 +169,15 @@ def lines(label: str, values: list[str], key: str) -> list[str]:
 
 def cases_tab(service: Service, run: dict, operator: str) -> None:
     cases = run.get("cases", [])
+    if run["status"] == "valid":
+        coverage = coverage_report({**run["output"], "test_cases": [c["content"] for c in cases]})
+        if coverage["uncovered_rules"]:
+            st.warning("已有用例可审核，但以下需求仍需补充覆盖："
+                       + "、".join(r["id"] for r in coverage["uncovered_rules"])
+                       + "。导出会明确记录缺口，不代表完整覆盖。")
+            with st.expander("查看尚需补充覆盖的需求", expanded=False):
+                for missing in coverage["uncovered_rules"]:
+                    st.text(missing["id"] + "：" + missing["statement"])
     if not cases:
         st.info("当前运行没有可审核用例。请查看校验与原始输出。")
         return
@@ -427,13 +436,14 @@ def review_result(service: Service, run: dict, operator: str, blockers: list[str
 
 def validation_repair(service: Service, run: dict, operator: str) -> None:
     validation = run.get("validation") or {}
-    if not (run["status"] == "invalid" and validation.get("json_valid")
+    if not (run["status"] == "invalid" and run.get("raw_output")
             and run["config"].get("finish_reason") in {None, "stop"}):
         return
     errors = validation.get("errors", [])
-    st.warning(f"模型已返回完整 JSON，但有 {len(errors)} 项结构或引用校验错误，尚未创建可审核用例。")
+    st.warning(f"生成内容仍有 {len(errors)} 项结构或引用问题，需要修复后审核，无需为内部格式修改 PRD。")
     st.info("这不是对 PRD 写作格式的要求。先由系统整理可计算的状态并重新检查现有结果，无需再次调用模型。")
-    if st.button("整理现有结果并进入审核（不调用模型）", key="local_revalidate",
+    locally_ready = validate_output(run["raw_output"], run["input"]["paragraphs"])["valid"]
+    if locally_ready and st.button("整理现有结果并进入审核（不调用模型）", key="local_revalidate",
                  disabled=not operator.strip() or st.session_state.get("_project_archived", False)):
         try:
             child = service.revalidate_existing(run["id"], run["revision"], operator, request_id())
@@ -524,7 +534,7 @@ def detail(service: Service, operator: str) -> None:
         st.session_state["_draft"] = document.get("normalized_text", document.get("text", ""))
         st.session_state["_parent"] = run_id
         go_to(PAGES[0])
-    st.caption("补充业务规则后需重新生成并审核；自定义输入请使用已配置的模型模式。")
+    st.caption("更新需求后可创建关联运行并重新审核，原记录与审批保留。")
     blockers = service.gate(run_id)
     tab_key = f"detail_tabs_{run_id}"
     completed = bool(cases) and all(c["status"] != "pending_review" for c in cases)
@@ -680,7 +690,7 @@ def main() -> None:
             st.divider()
             st.caption("操作者标识在主页面填写，用于记录生成和审批操作。")
             st.caption("通用 PRD 分析 · 模型生成 · SQLite 留存")
-            st.caption("学习原型，使用虚构数据。项目归属管理不替代多人身份与权限系统。")
+            st.caption("本机运行，请使用虚构或脱敏需求。项目归属管理不替代身份与权限系统。")
         operator = st.text_input("操作者标识（必填）", key="operator", max_chars=64,
                                  placeholder="例如：demo-reviewer",
                                  help="自报标签，用于记录生成与审核；不是身份认证。")

@@ -96,7 +96,7 @@ def test_ui_repair_requires_confirmation_and_navigates_to_child(tmp_path, monkey
     app.radio(key='page').set_value('运行详情与审核').run()
     assert not app.exception
     assert app.button(key='repair_validation').disabled
-    assert any('结构或引用校验错误' in item.value for item in app.warning)
+    assert any('结构或引用问题' in item.value for item in app.warning)
     app.checkbox(key=f"repair_confirm_{source['id']}").check().run()
     assert not app.button(key='repair_validation').disabled
     app.button(key='repair_validation').click().run()

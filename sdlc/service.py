@@ -260,7 +260,7 @@ class Service:
                     prompt = {"version": "LOCAL-RECHECK-R1", "schema_version": "1.0",
                               "source": {"run_id": parent_run_id, "revision": validation_source_revision},
                               "source_model_config": source["config"],
-                              "validation_policy": "review-friendly-1",
+                              "validation_policy": "review-friendly-2",
                               "rendered": "不调用模型。复用父运行原始响应，按当前策略重新校验并计算澄清状态。"}
                 else:
                     prompt = build_validation_repair_prompt(prepared["paragraphs"], source["raw_output"],

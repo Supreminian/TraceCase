@@ -5,6 +5,8 @@ import html
 import io
 import re
 
+from sdlc.domain import coverage_report
+
 
 def safe_cell(value):
     text = str(value)
@@ -21,11 +23,15 @@ def md(value):
 
 
 def render_export(run, cases, approvals, export_id, fmt):
+    coverage = coverage_report({**(run.get('output') or {}), 'test_cases': [c['content'] for c in cases]})
+    missing = coverage['uncovered_rules']
+    coverage_note = ('存在未关联用例的需求：' + '、'.join(r['id'] for r in missing)) if missing else '所有已提取规则均有关联用例；语义覆盖仍以人工复核为准'
     fields = [
         "project_id", "project_name", "run_id", "export_id", "prompt_version", "input_hash", "case_id", "version",
         "title", "requirement_ids", "paragraph_ids", "preconditions", "steps",
         "expected_results", "priority", "category", "approved_by", "approved_at",
         "approval_event_id",
+        "coverage_note",
     ]
     rows = []
     for case in cases:
@@ -37,7 +43,7 @@ def render_export(run, cases, approvals, export_id, fmt):
             ", ".join(c["paragraph_ids"]), "\n".join(c["preconditions"]),
             "\n".join(f'{s["number"]}. {s["action"]}' for s in c["steps"]),
             "\n".join(c["expected_results"]), c["priority"], c["category"],
-            approval["operator"], approval["created_at"], approval["id"],
+            approval["operator"], approval["created_at"], approval["id"], coverage_note,
         ], strict=True)))
     if fmt == "csv":
         stream = io.StringIO(newline="")
@@ -52,6 +58,7 @@ def render_export(run, cases, approvals, export_id, fmt):
         f'Prompt：{md(run["prompt"]["version"])}  ',
         f'输入 SHA-256：{md(run["input"]["input_hash"])}', "",
         "此文件保存导出当时的批准版本。后续修订不会改变本快照。", "",
+        "需求覆盖说明：" + md(coverage_note), "",
         "| 编号 | 版本 | 标题 | 需求 / 段落 | 优先级 | 分类 | 通过人 | 通过时间 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
@@ -68,4 +75,7 @@ def render_export(run, cases, approvals, export_id, fmt):
     lines += ["", "## 来源段落", ""]
     for p in run["input"]["paragraphs"]:
         lines += [f'### {md(p["id"])}', "", md(p["text"]), ""]
+    if missing:
+        lines += ['', '## 尚未关联用例的需求', '']
+        lines += [md(r['id']) + '：' + md(r['statement']) for r in missing]
     return "\n".join(lines).encode("utf-8"), "text/markdown"

@@ -121,11 +121,14 @@ def test_consistency_and_schema_failures(mutation, error):
     assert errors and any(error in e for e in errors), errors
 
 
-def test_edit_cannot_drop_all_coverage_of_an_explicit_rule():
+def test_missing_coverage_is_visible_without_discarding_existing_cases():
     snapshot, result = generated()
     output = result["output"]
     output["test_cases"] = [c for c in output["test_cases"] if "R-003" not in c["requirement_ids"]]
-    assert any("明确规则 R-003 完全没有关联用例" in e for e in validate_current(output, snapshot["paragraphs"]))
+    checked = validate_output(json.dumps(output), snapshot["paragraphs"])
+    assert checked["valid"]
+    assert "R-003" in {r["id"] for r in checked["coverage"]["uncovered_rules"]}
+    assert any("R-003" in w for w in checked["warnings"])
 
 
 def test_uncertainty_requires_blocking_questions_and_reciprocal_readiness():

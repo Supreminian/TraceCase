@@ -201,22 +201,27 @@ def test_new_clarification_revisions_and_evidenced_resolution(service):
     assert not service.gate(run_id)
 
 
-def test_cannot_remove_last_reference_to_rule(service):
+def test_correcting_references_preserves_review_and_exports_coverage_notice(service):
+    from sdlc.domain import coverage_report
     run_id = generate(service)
     run = service.get_run(run_id)
-    for rule in run["output"]["business_rules"]:
-        referencing = [c for c in run["cases"] if rule["id"] in c["content"]["requirement_ids"]]
-        for c in referencing:
-            changed = copy.deepcopy(c["content"])
-            other = next(r for r in run["output"]["business_rules"] if r["id"] != rule["id"])
-            changed["requirement_ids"] = [other["id"]]
-            changed["paragraph_ids"] = list(dict.fromkeys(changed["paragraph_ids"] + other["paragraph_ids"]))
-            if c is referencing[-1]:
-                with pytest.raises(ServiceError, match="没有关联用例"):
-                    service.edit(run_id, c["case_id"], c["version"], c["revision"], changed, "editor", "改变引用", rid())
-                return
-            service.edit(run_id, c["case_id"], c["version"], c["revision"], changed, "editor", "改变引用", rid())
-    pytest.fail("normal fixture must contain rules")
+    rule, other = run['output']['business_rules'][:2]
+    referencing = [c for c in run['cases'] if rule['id'] in c['content']['requirement_ids']]
+    for c in referencing:
+        changed = copy.deepcopy(c['content'])
+        changed['requirement_ids'] = [other['id']]
+        changed['paragraph_ids'] = list(dict.fromkeys(changed['paragraph_ids'] + other['paragraph_ids']))
+        service.edit(run_id, c['case_id'], c['version'], c['revision'], changed, 'editor', '纠正引用并记录覆盖缺口', rid())
+    updated = service.get_run(run_id)
+    coverage = coverage_report({**updated['output'], 'test_cases': [c['content'] for c in updated['cases']]})
+    assert rule['id'] in {r['id'] for r in coverage['uncovered_rules']}
+    approve_all(service, run_id)
+    csv_export = export(service, run_id, 'csv')
+    md_export = export(service, run_id, 'md')
+    assert 'coverage_note' in csv_export['content'].decode('utf-8-sig')
+    assert '存在未关联用例的需求' in csv_export['content'].decode('utf-8-sig')
+    assert '尚未关联用例的需求' in md_export['content'].decode()
+
 
 
 def test_child_run_does_not_inherit_approval(service):

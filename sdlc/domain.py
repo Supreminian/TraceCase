@@ -220,8 +220,6 @@ def validate_current(output: dict, paragraphs: list[dict]) -> list[str]:
         if question.scope == "case" and not question.affected_case_ids:
             errors.append(f"clarifications.{index}.affected_case_ids: case 范围须列出影响用例；无局部用例时使用 run")
     for index, rule in enumerate(parsed.business_rules):
-        if rule.status == "clear" and not any(rule.id in case.requirement_ids for case in parsed.test_cases):
-            errors.append(f"business_rules.{index}: 明确规则 {rule.id} 完全没有关联用例")
         if rule.status != "clear" and not any(rule.id in q.requirement_ids for q in parsed.clarifications):
             errors.append(f"business_rules.{index}: 非明确规则 {rule.id} 必须关联澄清问题")
     for index, case in enumerate(parsed.test_cases):
@@ -239,6 +237,15 @@ def validate_current(output: dict, paragraphs: list[dict]) -> list[str]:
         if case.readiness != expected_readiness:
             errors.append(f"test_cases.{index}.readiness: 应为 {expected_readiness}")
     return errors
+
+
+def coverage_report(output: dict) -> dict:
+    """Reference coverage is a quality signal, not proof of semantic completeness."""
+    linked = {rid for case in output.get('test_cases', []) for rid in case['requirement_ids']}
+    rules = output.get('business_rules', [])
+    missing = [{'id': r['id'], 'statement': r['statement']} for r in rules if r['id'] not in linked]
+    return {'rule_count': len(rules), 'linked_rule_count': len(rules) - len(missing),
+            'uncovered_rules': missing}
 
 
 def _reject_constant(value: str):
@@ -326,5 +333,13 @@ def validate_output(raw: str, paragraphs: list[dict]) -> dict:
     except ValidationError:
         pass  # Return the usual actionable schema errors below.
     errors = validate_current(output, paragraphs)
+    coverage = None
+    if not errors:
+        coverage = coverage_report(output)
+        if coverage['uncovered_rules']:
+            warnings.append("以下需求尚未关联用例，请在审核时补充覆盖："
+                            + '、'.join(r['id'] for r in coverage['uncovered_rules'])
+                            + "。现有用例可继续审核；导出会保留覆盖缺口说明。")
     return {"json_valid": True, "valid": not errors, "errors": errors, "output": output,
-            "warnings": warnings, "adjustments": adjustments, "validation_policy": "review-friendly-1"}
+            "warnings": warnings, "adjustments": adjustments, "coverage": coverage,
+            "validation_policy": "review-friendly-2"}
