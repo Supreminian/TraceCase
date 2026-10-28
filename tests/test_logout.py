@@ -98,3 +98,19 @@ logout_control(TOKEN)
     assert 'method="post"' in html and 'target="_self"' in html and 'action="/auth/logout"' in html
     assert token not in html and logout_proof(token) in html
     assert not app.get('link_button')
+
+
+def test_password_error_stays_on_settings_without_echoing_credentials(login):
+    store, token = login
+    with TestClient(gateway.app) as client:
+        client.cookies.set(COOKIE, token, domain='testserver.local')
+        client.get('/auth/password')
+        response = client.post('/auth/password', data={
+            'csrf': client.cookies['tracecase_csrf'], 'old_password': 'incorrect-old-password',
+            'new_password': 'private-new-password'})
+        assert '<title>TraceCase · 修改密码</title>' in response.text
+        assert 'action="/auth/password"' in response.text
+        assert 'role="status"' in response.text
+        assert 'incorrect-old-password' not in response.text
+        assert 'private-new-password' not in response.text
+        assert store.me(token)

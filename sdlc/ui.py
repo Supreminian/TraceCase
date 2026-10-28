@@ -5,14 +5,16 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from sdlc.theme import TOKENS, secondary_buttons
+
 
 TONES = {'input': '#2563eb', 'review': '#0f766e', 'clarify': '#b77910',
          'export': '#7c3aed', 'workspace': '#334155', 'analysis': '#4f46e5'}
 
 
 def apply_style():
-    st.markdown('''<style>
-    :root { --tc-ink:#18283e; --tc-muted:#63748b; --tc-line:#e1e7ef; }
+    st.markdown('<style>' + TOKENS + secondary_buttons(
+        '.stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button)') + '''
     .stApp { background:#f4f6fa; }
     .stMainBlockContainer { max-width:1380px; padding-top:4.5rem; padding-bottom:4rem; }
     [data-testid="stAppDeployButton"] { display:none; }
@@ -40,23 +42,8 @@ def apply_style():
     .stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"] { display:none; }
     [data-testid="stExpander"] { border-color:var(--tc-line); background:#fff; border-radius:10px; }
     button { border-radius:9px!important; font-weight:600!important; }
-    /* One secondary-button style for framework controls and native POST actions. */
-    .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button) {
-      display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box;
-      min-height:2.5rem; padding:.25rem .75rem; margin:0; font-family:inherit;
-      font-size:.875rem; font-weight:600; line-height:1.6; text-decoration:none;
-      border:1px solid #cbd5e1; border-radius:9px; background:#fff; color:var(--tc-ink);
-      cursor:pointer; user-select:none; transition:background-color .15s, border-color .15s, box-shadow .15s; }
     .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"]) p {
       margin:0; font-size:inherit; font-weight:inherit; line-height:inherit; }
-    .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button):hover:not(:disabled):not([disabled]) {
-      background:#edf1f7; border-color:#94a3b8; }
-    .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button):active:not(:disabled):not([disabled]) {
-      background:#e1e7ef; }
-    .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button):focus-visible {
-      outline:none; box-shadow:0 0 0 3px rgba(37,99,235,.2); border-color:#2563eb; }
-    .stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseLinkButton-secondary"], .tc-logout-button):is(:disabled,[disabled]) {
-      opacity:.45; cursor:not-allowed; }
     [data-testid="stTextArea"] textarea { background:#fbfcfe; border-radius:10px; line-height:1.7; }
     [data-testid="stAlert"] { border-radius:10px; }
     [class*="st-key-header_"] { padding:22px 26px; background:white; border:1px solid var(--tc-line); border-radius:14px; margin-bottom:6px; }

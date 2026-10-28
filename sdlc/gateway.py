@@ -9,12 +9,12 @@ import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.websockets import WebSocketDisconnect
-from starlette.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
+from starlette.responses import RedirectResponse, Response, JSONResponse
 from starlette.routing import Route, WebSocketRoute
 import websockets
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, SESSION_SECONDS, logout_proof, session_marker
-from sdlc import github_auth
+from sdlc import github_auth, web_ui
 
 DB_PATH = os.environ.get('SDLC_DB_PATH', str(Path(__file__).resolve().parents[1] / 'data/sdlc.sqlite3'))
 UPSTREAM = 'http://127.0.0.1:' + os.environ.get('SDLC_PRIVATE_PORT', '8502')
@@ -79,24 +79,27 @@ async def session_status(request):
 
 def page(message='', csrf=None, signed_out=False):
     csrf = csrf or secrets.token_urlsafe(32)
-    html = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TraceCase · 登录</title><style>body{background:#f4f6fa;color:#18283e;font:16px system-ui;margin:0}main{max-width:440px;margin:7vh auto;padding:32px;background:white;border:1px solid #dde3ec;border-radius:18px}h1{color:#2563eb}input{box-sizing:border-box;width:100%;padding:12px;margin:6px 0 16px;border:1px solid #cbd5e1;border-radius:8px}button{background:#2563eb;color:white;border:0;border-radius:8px;padding:12px 24px;cursor:pointer}.github{display:block;background:#18283e;color:white;padding:12px;text-align:center;text-decoration:none;border-radius:8px}details{margin-top:26px;border-top:1px solid #dde3ec;padding-top:20px}p{line-height:1.7}.message{color:#b45309}</style>
-<main><h1>TraceCase</h1><p>登录后，在个人空间或团队空间中生成、审核和导出测试用例。</p>'''
-    html += '<p class="message">' + escape(message) + '</p>'
-    if github_auth.configured():
-        html += '<p><a class="github" href="/auth/github/start">使用 GitHub 登录</a></p>'
-    else:
-        html += '<p><button disabled style="background:#94a3b8;cursor:default">GitHub 登录暂不可用</button></p>'
-    hidden = '<input type="hidden" name="csrf" value="' + escape(csrf) + '">'
-    html += '<h2>登录</h2><form method="post" action="/auth/login">' + hidden
-    html += '<label>账号<input name="username" autocomplete="username" required maxlength="40"></label><label>密码<input name="password" type="password" autocomplete="current-password" required maxlength="128"></label><button>登录</button></form>'
-    html += '<details><summary>还没有账号？注册</summary><form method="post" action="/auth/register">' + hidden
-    html += '<label>账号<input name="username" required minlength="3" maxlength="40" autocomplete="username" placeholder="英文字母、数字、_、- 或 ."></label><label>显示名称<input name="display_name" required maxlength="40"></label><label>密码（10–128 个字符）<input name="password" type="password" required minlength="10" maxlength="128" autocomplete="new-password"></label><label>确认密码<input name="confirmation" type="password" required maxlength="128" autocomplete="new-password"></label><button>创建账号</button></form></details></main></html>'
-    if signed_out:
-        html += AUTH_BROADCAST
-    response = HTMLResponse(html)
+    hidden = web_ui.hidden_csrf(csrf)
+    github = ('<a class="tc-button github" href="/auth/github/start">使用 GitHub 登录</a>'
+              if github_auth.configured() else '<button class="tc-button github" disabled>GitHub 登录暂不可用</button>')
+    login = ('<section class="tc-card"><h2 class="tc-section">登录</h2>'
+             + web_ui.notice(message, 'success' if signed_out or message.startswith(('注册成功', '密码已修改')) else 'error')
+             + github + '<div class="tc-divider">或使用账号密码</div><form method="post" action="/auth/login">' + hidden
+             + web_ui.field('账号', 'username', autocomplete='username', maximum=40)
+             + web_ui.field('密码', 'password', password=True, autocomplete='current-password')
+             + '<button class="tc-button primary tc-wide">登录</button></form>'
+             + '<details><summary>还没有账号？注册</summary><form method="post" action="/auth/register">' + hidden
+             + web_ui.field('账号', 'username', input_id='register_username', autocomplete='username', minimum=3, maximum=40,
+                            hint='3–40 个字符，支持英文字母、数字、_、- 或 .')
+             + web_ui.field('显示名称', 'display_name', autocomplete='nickname', maximum=40)
+             + web_ui.field('密码（10–128 个字符）', 'password', input_id='register_password', password=True, autocomplete='new-password', minimum=10)
+             + web_ui.field('确认密码', 'confirmation', password=True, autocomplete='new-password')
+             + '<button class="tc-button primary tc-wide">创建账号</button></form></details></section>')
+    aside = '<aside class="tc-card"><h2 class="tc-section">从需求到测试用例</h2><ol class="tc-list"><li>输入 PRD，生成测试用例与待澄清问题。</li><li>在个人或团队空间逐条审核，退回后继续迭代。</li><li>全部通过后导出，保留需求引用与审核记录。</li></ol></aside>'
+    response = web_ui.render('欢迎回来', '登录后，在个人空间或团队空间中生成、审核和导出测试用例。',
+                             '<div class="tc-grid">' + login + aside + '</div>', accent='#2563eb',
+                             scripts=AUTH_BROADCAST if signed_out else '')
     response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict', max_age=3600)
-    response.headers['Cache-Control'] = 'no-store'
     return response
 
 
@@ -119,8 +122,9 @@ async def auth(request: Request):
             except AccessError:
                 return RedirectResponse('/auth/login', 303)
             # GET never changes login state; only old bookmarks use this confirmation page.
-            html = '<h2>退出当前登录</h2><p>' + escape(user['display_name']) + '</p><form method="post" action="/auth/logout"><input type="hidden" name="logout_proof" value="' + logout_proof(token) + '"><button>退出登录</button></form><p><a href="/">返回工作台</a></p>'
-            return HTMLResponse(html + watch_session(user['id'], request.cookies.get(COOKIE)), headers={'Cache-Control': 'no-store'})
+            body = '<section class="tc-card"><h2 class="tc-section">确认退出</h2><p>退出后需要重新登录才能继续访问项目。</p><form method="post" action="/auth/logout"><input type="hidden" name="logout_proof" value="' + logout_proof(token) + '"><div class="tc-actions"><button class="tc-button primary">退出登录</button>' + web_ui.button('返回工作台', '/') + '</div></form></section>'
+            return web_ui.render('退出当前登录', '确认结束当前登录会话。', body, user=user, token=token,
+                                 scripts=watch_session(user['id'], token))
         if request.url.path == '/auth/login':
             try:
                 accounts().me(request.cookies.get(COOKIE))
@@ -191,7 +195,36 @@ async def auth(request: Request):
         # Known safe domain errors only; never include submitted passwords or transport traces.
         import sys
         error = sys.exception()
+        if request.url.path == '/auth/password':
+            try:
+                user = accounts().me(request.cookies.get(COOKIE))
+            except AccessError:
+                pass
+            else:
+                return password_response(request, user, str(error))
         return page(str(error), csrf=request.cookies.get('tracecase_csrf'))
+
+
+def password_response(request, user, message=''):
+    token = request.cookies.get(COOKIE)
+    csrf = request.cookies.get('tracecase_csrf') or secrets.token_urlsafe(32)
+    if user['password_login']:
+        body = ('<div class="tc-grid"><section class="tc-card"><h2 class="tc-section">设置新密码</h2>'
+                + web_ui.notice(message) + '<form method="post" action="/auth/password">' + web_ui.hidden_csrf(csrf)
+                + web_ui.field('当前密码', 'old_password', password=True, autocomplete='current-password')
+                + web_ui.field('新密码', 'new_password', password=True, autocomplete='new-password', minimum=10,
+                               hint='请输入 10–128 个字符。')
+                + '<div class="tc-actions"><button class="tc-button primary">修改密码</button>'
+                + web_ui.button('返回工作台', '/') + '</div></form></section>'
+                + '<aside class="tc-card"><h2 class="tc-section">修改后会发生什么</h2><p class="tc-muted">修改成功后，所有设备须重新登录。请使用新密码登录后继续工作。</p>'
+                + web_ui.button('查看登录账号与绑定', '/auth/account') + '</aside></div>')
+    else:
+        body = '<section class="tc-card"><h2 class="tc-section">GitHub 登录</h2><p>此账号使用 GitHub 登录，没有本地密码。</p>' + web_ui.button('查看登录账号', '/auth/account') + '</section>'
+    response = web_ui.render('修改密码', '管理账号密码，保障工作空间的访问安全。', body,
+                             user=user, token=token, active='password', accent='#2563eb',
+                             scripts=watch_session(user['id'], token))
+    response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict', max_age=3600)
+    return response
 
 
 async def password_page(request):
@@ -199,35 +232,36 @@ async def password_page(request):
         user = accounts().me(request.cookies.get(COOKIE))
     except AccessError:
         return RedirectResponse('/auth/login', 303)
-    if not user['password_login']:
-        return HTMLResponse('<h2>登录方式</h2><p>此账号使用 GitHub 登录，没有本地密码。</p><a href="/auth/account">查看登录账号</a> · <a href="/">返回工作台</a>', headers={'Cache-Control': 'no-store'})
-    csrf = request.cookies.get('tracecase_csrf') or secrets.token_urlsafe(32)
-    response = HTMLResponse('<h2>修改密码</h2><p>修改成功后，所有设备须重新登录。</p><form method="post" action="/auth/password"><input type="hidden" name="csrf" value="' + escape(csrf) + '"><label>当前密码<input name="old_password" type="password" autocomplete="current-password" required maxlength="128"></label><label>新密码<input name="new_password" type="password" autocomplete="new-password" required minlength="10" maxlength="128"></label><button>修改密码</button></form><a href="/">返回工作台</a>' + watch_session(user['id'], request.cookies.get(COOKIE)))
-    response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict')
-    response.headers['Cache-Control'] = 'no-store'
-    return response
+    return password_response(request, user)
 
 
 async def account_page(request):
     try:
         store = accounts()
-        user = store.me(request.cookies.get(COOKIE))
+        token = request.cookies.get(COOKIE)
+        user = store.me(token)
         with store.db() as db:
             linked = db.execute("SELECT login FROM external_identities WHERE user_id=? AND provider='github'", (user['id'],)).fetchone()
     except AccessError:
         return RedirectResponse('/auth/login', 303)
     csrf = request.cookies.get('tracecase_csrf') or secrets.token_urlsafe(32)
-    html = '<h2>登录账号</h2><p>' + escape(user['display_name']) + '</p>'
+    profile = ('<section class="tc-card"><h2 class="tc-section">登录账号</h2><dl class="tc-facts"><div><dt>显示名称</dt><dd>'
+               + escape(user['display_name']) + '</dd></div><div><dt>账号</dt><dd>' + escape(user['username']) + '</dd></div></dl></section>')
+    github = '<section class="tc-card"><h2 class="tc-section">GitHub 账号绑定</h2>'
     if linked:
-        html += '<p>已绑定 GitHub：' + escape(linked['login']) + '</p>'
+        github += '<span class="tc-badge success">已绑定</span><p>已绑定 GitHub：' + escape(linked['login']) + '</p><p class="tc-muted">可使用此 GitHub 账号登录当前工作空间。</p>'
     elif github_auth.configured():
-        html += '<p>绑定后可使用 GitHub 登录当前账号，保留原有项目和团队身份。</p><form method="post" action="/auth/github/link"><input type="hidden" name="csrf" value="' + escape(csrf) + '"><button>绑定 GitHub</button></form>'
+        github += '<span class="tc-badge">未绑定</span><p class="tc-muted">绑定后可使用 GitHub 登录当前账号，保留原有项目和团队身份。</p><form method="post" action="/auth/github/link">' + web_ui.hidden_csrf(csrf) + '<button class="tc-button primary">绑定 GitHub</button></form>'
     else:
-        html += '<p>GitHub 登录暂不可用，请稍后重试。</p>'
+        github += '<span class="tc-badge">暂不可用</span><p class="tc-muted">GitHub 登录暂不可用，请稍后重试。</p><button class="tc-button secondary" disabled>绑定 GitHub</button>'
+    security = '<aside class="tc-card"><h2 class="tc-section">密码与安全</h2>'
     if user['password_login']:
-        html += '<p><a href="/auth/password">修改密码</a></p>'
-    html += '<p><a href="/">返回工作台</a></p>'
-    response = HTMLResponse(html + watch_session(user['id'], request.cookies.get(COOKIE)), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+        security += '<span class="tc-badge success">已启用密码登录</span><p class="tc-muted">使用账号密码登录，也可以绑定 GitHub 以便下次快速进入工作台。</p>' + web_ui.button('修改密码', '/auth/password')
+    else:
+        security += '<span class="tc-badge">GitHub 登录</span><p class="tc-muted">此账号使用 GitHub 登录，没有本地密码。请在 GitHub 管理密码与登录安全。</p>'
+    body = '<div class="tc-grid"><div>' + profile + github + '</section></div>' + security + '</aside></div>'
+    response = web_ui.render('登录账号与绑定', '查看账号信息，管理登录方式。', body, user=user, token=token,
+                             active='account', accent='#4f46e5', scripts=watch_session(user['id'], token))
     response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict', max_age=3600)
     return response
 
@@ -273,7 +307,7 @@ async def github_callback(request):
         identity = await github_auth.profile(config, request.query_params.get('code'), flow['verifier'])
         token = await asyncio.to_thread(github_auth.finish, store, identity, flow)
         # Commit a same-origin document before navigating, preserving Strict session-cookie semantics.
-        response = HTMLResponse('<!doctype html><meta charset="utf-8"><title>登录成功</title><p>GitHub 登录成功，正在进入工作台…</p><a href="/">进入工作台</a><script>window.location.replace("/");</script>')
+        response = web_ui.render('GitHub 登录成功', '正在进入工作台…', '<section class="tc-card"><p>登录已完成，可以继续访问项目。</p>' + web_ui.button('进入工作台', '/', primary=True) + '</section>', scripts='<script>window.location.replace("/");</script>')
         response.set_cookie(COOKIE, token, httponly=True, secure=SECURE, samesite='strict', max_age=SESSION_SECONDS)
     except AccessError as exc:
         response = page(str(exc), csrf=request.cookies.get('tracecase_csrf'))
@@ -292,7 +326,7 @@ async def download(request):
             'Content-Disposition': 'attachment; filename="' + exported['filename'] + '"',
             'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
     except ValueError:
-        return Response('无权下载此快照，请重新登录或核对权限。', status_code=403)
+        return web_ui.render('暂时无法下载', '无权下载此快照，请重新登录或核对权限。', '<section class="tc-card">' + web_ui.button('返回工作台', '/') + '</section>', status_code=403)
 
 
 async def proxy(request):
@@ -326,7 +360,7 @@ async def proxy(request):
             content += watch_session(user['id'], request.cookies.get(COOKIE)).encode()
         return Response(content, upstream.status_code, response_headers)
     except httpx.HTTPError:
-        return HTMLResponse('工作台正在启动，请稍后刷新。', status_code=503)
+        return web_ui.render('工作台正在启动', '工作台正在启动，请稍后刷新。', '<section class="tc-card">' + web_ui.button('重新打开工作台', '/') + '</section>', user=user, token=request.cookies.get(COOKIE), scripts=watch_session(user['id'], request.cookies.get(COOKIE)), status_code=503)
 
 
 async def socket_proxy(websocket):
