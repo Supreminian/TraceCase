@@ -23,6 +23,14 @@ def apply_style():
     h2 { font-size:1.35rem!important; } h3 { font-size:1.1rem!important; }
     [data-testid="stCaptionContainer"] { color:var(--tc-muted); line-height:1.65; }
     [data-testid="stSidebar"] { background:#edf1f7; border-right:1px solid var(--tc-line); }
+    /* The sidebar menu scrolls independently of its persistent footer. */
+    [data-testid="stSidebarContent"] { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+    [data-testid="stSidebarHeader"] { flex-shrink:0; }
+    [data-testid="stSidebarUserContent"] { flex:1; min-height:0; overflow-y:auto; padding-bottom:88px; }
+    [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.tc-sidebar-footer) {
+      position:absolute; bottom:0; left:0; right:0; z-index:3; width:100%; min-height:56px;
+      background:#edf1f7; border-top:1px solid var(--tc-line); padding:16px 20px; margin:0; }
+    .tc-sidebar-footer { color:var(--tc-muted); font-size:12px; line-height:1.65; }
     /* Navigation keeps keyboard/radio semantics, without form-control circles. */
     .st-key-page [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) { display:none; }
     .st-key-page [data-testid="stRadioOption"] > div { gap:0; }

@@ -751,6 +751,7 @@ def main() -> None:
     apply_style()
     with st.sidebar:
         st.markdown('<div class="tc-brand"><span class="tc-logo">TC</span><div><strong>TraceCase</strong><small>需求与测试工作台</small></div></div>', unsafe_allow_html=True)
+        st.markdown('<footer class="tc-sidebar-footer">操作记录关联当前登录账号。</footer>', unsafe_allow_html=True)
     if "_navigate_to" in st.session_state:
         st.session_state["page"] = st.session_state.pop("_navigate_to")
     if "_selected_run" in st.session_state:
@@ -789,7 +790,6 @@ def main() -> None:
                 page = '项目列表'
             st.divider()
             operator = user['id']
-            st.caption("操作记录关联当前登录账号。")
             space_navigation(user, token, admin.user)
         if "_notice" in st.session_state:
             st.success(st.session_state.pop("_notice"))
