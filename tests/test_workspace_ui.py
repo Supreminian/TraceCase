@@ -110,3 +110,23 @@ else:
     app.button(key='close_team_management').click().run()
     assert app.title[0].value == '项目工作台'
     assert app.session_state['current_project'] == 'existing-project'
+
+
+def test_work_mode_picker_shares_space_navigation_and_has_single_sidebar_logout(context):
+    store, token = context
+    app = AppTest.from_string(f'''
+from unittest.mock import patch
+from sdlc.account_ui import enter
+from sdlc.accounts import COOKIE
+with patch('sdlc.account_ui.st.context') as browser_context:
+    browser_context.cookies = {{COOKIE: {token!r}}}
+    enter({str(store.path)!r})
+''', default_timeout=10).run()
+    assert not app.exception
+    assert app.title[0].value == '选择工作方式'
+    assert app.sidebar.button(key='switch_workspace')
+    labels = [item.proto.label for item in app.sidebar.get('link_button')]
+    assert labels == ['登录账号与绑定', '修改密码']
+    assert len(app.get('html')) == len(app.sidebar.get('html')) == 1
+    assert 'action="/auth/logout"' in app.sidebar.get('html')[0].proto.body
+    assert not any(widget.key == 'page' for widget in app.radio)

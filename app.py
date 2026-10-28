@@ -782,7 +782,11 @@ def main() -> None:
                                      placeholder="请选择项目", on_change=project_changed,
                                      format_func=lambda pid: next(p["name"] + ("（已归档）" if p["status"] == "archived" else "")
                                                                   for p in projects if p["id"] == pid))
-            page = st.radio("项目功能", PAGES, key="page")
+            if project_id:
+                page = st.radio("项目功能", PAGES, key="page")
+            else:
+                st.session_state['page'] = '项目列表'
+                page = '项目列表'
             st.divider()
             operator = user['id']
             st.caption("操作记录关联当前登录账号。")

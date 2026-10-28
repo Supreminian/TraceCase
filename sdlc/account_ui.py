@@ -66,18 +66,7 @@ def enter(path):
         with st.sidebar:
             workspace_mode(chosen, sidebar=True)
             st.caption(user['display_name'] + ' · ' + ('个人工作' if chosen['kind'] == 'personal' else ROLE_NAMES[chosen['role']]))
-            st.caption('团队功能' if chosen['kind'] == 'team' else '空间功能')
-            with st.container(key='workspace_navigation'):
-                if st.button('切换个人 / 团队空间', width='stretch'):
-                    st.session_state.pop('active_workspace', None)
-                    reset_space()
-                    st.rerun()
-                if chosen['kind'] == 'team':
-                    team_navigation()
-                st.link_button('登录账号与绑定', '/auth/account', width='stretch')
-                if user.get('password_login', True):
-                    st.link_button('修改密码', '/auth/password', width='stretch')
-                logout_control(token)
+            space_navigation(user, token, chosen)
         workspace_mode(chosen)
         if chosen['kind'] == 'team' and st.session_state.get('show_team_management'):
             # Retain navigation widgets while the management page hides project controls.
@@ -87,13 +76,31 @@ def enter(path):
             team_management(store, token, chosen)
             st.stop()
         return token, current, user
+    with st.sidebar:
+        st.caption(user['display_name'])
+        space_navigation(user, token)
     workspace_picker(store, token, spaces)
     for item in store.applications(token):
         status = {'pending': '待管理员审核', 'approved': '已批准，可进入团队', 'rejected': '已拒绝'}[item['status']]
         st.info(item['name'] + ' · ' + status + (' · ' + item['reason'] if item['reason'] else ''))
     st.caption('升级前尚无账号归属的项目由本机维护者明确分配，不会自动归入新注册账号。')
-    logout_control(token)
     st.stop()
+
+
+def space_navigation(user, token, chosen=None):
+    st.caption('团队功能' if chosen and chosen['kind'] == 'team' else '空间功能')
+    with st.container(key='workspace_navigation'):
+        if st.button('切换个人 / 团队空间', key='switch_workspace', width='stretch',
+                     type='secondary' if chosen else 'primary'):
+            st.session_state.pop('active_workspace', None)
+            reset_space()
+            st.rerun()
+        if chosen and chosen['kind'] == 'team':
+            team_navigation()
+        st.link_button('登录账号与绑定', '/auth/account', width='stretch')
+        if user.get('password_login', True):
+            st.link_button('修改密码', '/auth/password', width='stretch')
+        logout_control(token)
 
 
 def set_team_management(enabled):

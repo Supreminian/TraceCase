@@ -20,6 +20,7 @@ def test_first_project_creation_and_empty_workspace(tmp_path, monkeypatch):
     path = tmp_path / 'ui.sqlite3'
     app = app_for(path, monkeypatch)
     assert app.title[0].value == '项目列表'
+    assert not any(widget.key == 'page' for widget in app.radio)
     assert not any(b.key == 'generate' for b in app.button)
     app.text_input(key='new_project_name').input('报销审批项目')
     app.text_area(key='new_project_description').input('仅虚构数据')
@@ -143,3 +144,16 @@ def test_project_pagination_appears_only_over_page_limit_and_switches_pages(tmp_
     app.selectbox(key='projects_page').select(1).run()
     assert not app.exception
     assert len([b for b in app.button if (b.key or '').startswith('enter_project_')]) == 25
+
+
+def test_clearing_project_hides_project_navigation(tmp_path, monkeypatch):
+    path = tmp_path / 'clear-project.sqlite3'
+    project = Service(path).create_project('可切换项目', '', 'tester')
+    app = app_for(path, monkeypatch)
+    assert not any(widget.key == 'page' for widget in app.radio)
+    app.selectbox(key='current_project').select(project).run()
+    assert app.radio(key='page').value == '项目概览'
+    app.selectbox(key='current_project').select(None).run()
+    assert not app.exception
+    assert not any(widget.key == 'page' for widget in app.radio)
+    assert app.title[0].value == '项目列表'
