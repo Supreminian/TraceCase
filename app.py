@@ -64,15 +64,23 @@ def paragraph_text(paragraph: dict) -> str:
     return paragraph.get("text", paragraph.get("content", ""))
 
 
-def source_view(document: dict, key: str, preferred: list[str] | None = None) -> None:
+def source_view(document: dict, key: str, related_ids: list[str] | None = None) -> None:
+    """Show only supplied references; None explicitly requests the full PRD."""
     paragraphs = document.get("paragraphs", [])
     if not paragraphs:
         st.info("没有可显示的来源段落。")
         return
     mapping = {p["id"]: p for p in paragraphs}
-    ids = list(mapping)
-    index = next((ids.index(p) for p in (preferred or []) if p in ids), 0)
-    selected = st.selectbox("定位来源段落", ids, index=index, key=key)
+    if related_ids is None:
+        ids = list(mapping)
+    else:
+        ids = list(dict.fromkeys(pid for pid in related_ids if pid in mapping))
+        if not ids:
+            st.info("当前内容没有可定位的关联段落，请核对需求引用。")
+            return
+    if key in st.session_state and st.session_state[key] not in ids:
+        st.session_state.pop(key)
+    selected = st.selectbox("定位来源段落", ids, key=key)
     paragraph = mapping[selected]
     st.caption(f"原文第 {paragraph.get('start_line', '—')}–{paragraph.get('end_line', '—')} 行 · {selected}")
     with st.container(height=260, border=False):
@@ -224,7 +232,7 @@ def cases_tab(service: Service, run: dict, operator: str) -> None:
                     st.text(value)
     with right:
         with st.container(border=True, key=f"case_source_panel_{run['id']}"):
-            section_title("需求依据", "直接核对生成内容与原文是否一致。", "workspace")
+            section_title("需求依据", "仅展示当前用例直接引用及关联规则引用的原文段落。", "workspace")
             sources = linked_source_ids(run, content)
             st.caption("直接引用及关联规则来源：" + "、".join(sources))
             source_view(run["input"], f"case_source_{token}", sources)
