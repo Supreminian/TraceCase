@@ -103,11 +103,29 @@ def page(message='', csrf=None, signed_out=False):
     return response
 
 
-def csrf_ok(request, form):
-    # Native forms share the gateway's origin. Ignore untrusted forwarded host headers.
+def check_form_source(request, message='请求来源无效，请重新打开登录页。'):
+    """Check browser provenance; opaque origins also need same-origin Fetch Metadata.
+
+    Some embedded browsers sandbox native form submissions, serializing Origin as
+    null. That value is never trusted alone. Callers must additionally verify a
+    cookie-bound CSRF token or session-derived action proof before any mutation.
+    """
     origin = request.headers.get('origin')
-    if origin and origin != str(request.base_url).rstrip('/'):
-        raise AccessError('请求来源无效，请重新打开登录页。')
+    site = request.headers.get('sec-fetch-site')
+    expected = str(request.base_url).rstrip('/')
+    if site == 'cross-site':
+        raise AccessError(message)
+    if origin == 'null':
+        if site != 'same-origin':
+            raise AccessError(message)
+        return True
+    if origin and origin != expected:
+        raise AccessError(message)
+    return origin == expected
+
+
+def csrf_ok(request, form):
+    check_form_source(request)
     cookie, field = request.cookies.get('tracecase_csrf', ''), form.get('csrf', '')
     if not cookie or not isinstance(field, str) or not secrets.compare_digest(cookie, field):
         raise AccessError('页面已过期，请重新提交。')
@@ -153,14 +171,12 @@ async def auth(request: Request):
         if request.url.path == '/auth/logout' and 'logout_proof' in form:
             token = request.cookies.get(COOKIE)
             proof = form.get('logout_proof')
-            origin = request.headers.get('origin')
-            if origin and origin != str(request.base_url).rstrip('/'):
-                raise AccessError('请求来源无效，请刷新工作台后重试。')
+            verified_source = check_form_source(request, '请求来源无效，请刷新工作台后重试。')
             if token:
                 expected = logout_proof(token)
                 if not expected or not isinstance(proof, str) or not secrets.compare_digest(proof, expected):
                     raise AccessError('登录状态已变化，请刷新工作台后再退出。')
-            elif origin != str(request.base_url).rstrip('/'):
+            elif not verified_source:
                 raise AccessError('登录状态已失效，请重新打开登录页。')
         else:
             csrf_ok(request, form)
