@@ -126,7 +126,7 @@ with patch('sdlc.account_ui.st.context') as browser_context:
     assert app.title[0].value == '选择工作方式'
     assert app.sidebar.button(key='switch_workspace')
     labels = [item.proto.label for item in app.sidebar.get('link_button')]
-    assert labels == ['登录账号与绑定', '修改密码']
+    assert labels == ['个人资料', '登录账号与绑定', '修改密码']
     assert len(app.get('html')) == len(app.sidebar.get('html')) == 1
     assert 'action="/auth/logout"' in app.sidebar.get('html')[0].proto.body
     assert not any(widget.key == 'page' for widget in app.radio)

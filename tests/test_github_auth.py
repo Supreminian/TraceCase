@@ -242,7 +242,7 @@ def test_account_migration_preserves_existing_password_users_and_history(oauth):
     Accounts(oauth.path)
     assert oauth.me(oauth.login('old-user', PASSWORD))['password_login'] == 1
     with oauth.db() as db:
-        assert db.execute('SELECT version FROM account_meta').fetchone()[0] == 4
+        assert db.execute('SELECT version FROM account_meta').fetchone()[0] == 5
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
     # Bound identity keys are database-enforced, even under concurrent first logins.
     with pytest.raises(sqlite3.IntegrityError):

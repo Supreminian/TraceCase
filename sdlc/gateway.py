@@ -8,13 +8,14 @@ import secrets
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.exceptions import HTTPException
 from starlette.websockets import WebSocketDisconnect
 from starlette.responses import RedirectResponse, Response, JSONResponse
 from starlette.routing import Route, WebSocketRoute
 import websockets
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, SESSION_SECONDS, logout_proof, session_marker
-from sdlc import github_auth, web_ui
+from sdlc import github_auth, web_ui, profiles
 
 DB_PATH = os.environ.get('SDLC_DB_PATH', str(Path(__file__).resolve().parents[1] / 'data/sdlc.sqlite3'))
 UPSTREAM = 'http://127.0.0.1:' + os.environ.get('SDLC_PRIVATE_PORT', '8502')
@@ -282,6 +283,103 @@ async def account_page(request):
     return response
 
 
+def profile_response(request, user, message='', submitted=None):
+    store = accounts()
+    token = request.cookies.get(COOKIE)
+    try:
+        profile = profiles.get_profile(store, token)
+    except AccessError:
+        return RedirectResponse('/auth/login', 303)
+    csrf = request.cookies.get('tracecase_csrf') or secrets.token_urlsafe(32)
+    values = submitted or profile
+    display_name = values.get('display_name', profile['display_name'])
+    bio = values.get('bio', profile['bio'])
+    if not isinstance(display_name, str) or not isinstance(bio, str):
+        display_name, bio = profile['display_name'], profile['bio']
+    notice = web_ui.notice(message) if message else web_ui.notice('个人资料已保存。', 'success') if request.query_params.get('saved') == '1' else ''
+    body = ('<div class="tc-grid"><section class="tc-card"><h2 class="tc-section">编辑个人资料</h2>' + notice
+            + '<form method="post" action="/auth/profile" enctype="multipart/form-data">' + web_ui.hidden_csrf(csrf)
+            + '<input type="hidden" name="revision" value="' + str(profile['revision']) + '">'
+            + '<div class="tc-field"><label class="tc-label" for="display_name">显示名称</label><input id="display_name" name="display_name" autocomplete="nickname" required maxlength="40" value="'
+            + escape(display_name, quote=True) + '"><small>用于导航栏与新产生的操作记录，最多 40 个字符。</small></div>'
+            + '<div class="tc-field"><label class="tc-label" for="bio">个人简介</label><textarea id="bio" name="bio" maxlength="500" placeholder="介绍你的工作方向或协作习惯…">'
+            + escape(bio) + '</textarea><small>选填，最多 500 个字符。</small></div>'
+            + '<div class="tc-field"><label class="tc-label" for="avatar">上传头像</label><input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp">'
+            + '<small>PNG / JPEG / WebP，最多 2 MiB。保存后自动居中裁切为正方形；不选择文件则保留现有头像。</small></div>')
+    if profile['has_avatar']:
+        body += '<label><input type="checkbox" name="remove_avatar" value="1" style="width:auto;min-height:auto"> 恢复默认头像</label>'
+    body += ('<div class="tc-actions"><button class="tc-button primary">保存个人资料</button>' + web_ui.button('返回工作台', '/')
+             + '</div></form></section><aside class="tc-card"><h2 class="tc-section">当前资料</h2>'
+             + '<img class="tc-avatar large" src="/auth/avatar" alt="当前头像"><h3>' + escape(profile['display_name']) + '</h3>'
+             + '<p class="tc-muted">' + escape(profile['bio'] or '还没有填写个人简介。') + '</p>'
+             + '<dl class="tc-facts"><div><dt>登录账号</dt><dd>' + escape(profile['username']) + '</dd></div></dl>'
+             + '<div class="tc-actions">' + web_ui.button('登录账号与绑定', '/auth/account') + '</div></aside></div>')
+    response = web_ui.render('个人资料', '设置头像和个人介绍，让工作空间里的身份更清晰。', body,
+                             user=profile, token=token, active='profile', accent='#4f46e5',
+                             scripts=watch_session(user['id'], token))
+    response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict', max_age=3600)
+    return response
+
+
+async def profile_page(request):
+    store = accounts()
+    token = request.cookies.get(COOKIE)
+    try:
+        user = store.me(token)
+    except AccessError:
+        return RedirectResponse('/auth/login', 303)
+    if request.method == 'GET':
+        return profile_response(request, user)
+    form = None
+    try:
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > profiles.MAX_AVATAR_BYTES + 16384:
+                raise AccessError('头像上传内容过大，请选择 2 MiB 以内的图片。')
+            chunks.append(chunk)
+        request._body = b''.join(chunks)
+        form = await request.form(max_files=1, max_fields=8, max_part_size=2048)
+        csrf_ok(request, form)
+        store.throttle('profile:' + user['id'], 30)
+        upload = form.get('avatar')
+        data = None
+        filename = ''
+        from starlette.datastructures import UploadFile
+        if isinstance(upload, UploadFile) and upload.filename:
+            filename = upload.filename
+            data = await upload.read(profiles.MAX_AVATAR_BYTES + 1)
+        try:
+            revision = int(form.get('revision', ''))
+        except (TypeError, ValueError):
+            raise AccessError('资料版本无效，请刷新后重试。') from None
+        await asyncio.to_thread(profiles.save_profile, store, token, form.get('display_name', ''),
+                                form.get('bio', ''), revision, avatar=data, filename=filename,
+                                remove_avatar=form.get('remove_avatar') == '1')
+        return RedirectResponse('/auth/profile?saved=1', 303, headers={'Cache-Control': 'no-store'})
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        return profile_response(request, user, '上传表单无效，请重新选择头像后提交。')
+    except profiles.ProfileConflict as exc:
+        return profile_response(request, user, str(exc))
+    except AccessError as exc:
+        return profile_response(request, user, str(exc), form)
+    finally:
+        if form is not None:
+            await form.close()
+
+
+async def avatar_image(request):
+    try:
+        content = await asyncio.to_thread(profiles.avatar_png, accounts(), request.cookies.get(COOKIE))
+    except AccessError:
+        return Response(status_code=401, headers={'Cache-Control': 'no-store'})
+    return Response(content, media_type='image/png', headers={
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Disposition': 'inline; filename="avatar.png"'})
+
+
 async def github_start(request):
     try:
         config = github_auth.Config.load()
@@ -420,6 +518,8 @@ async def socket_proxy(websocket):
 app = Starlette(routes=[
     Route('/auth/session', session_status),
     Route('/auth/account', account_page),
+    Route('/auth/profile', profile_page, methods=['GET', 'POST']),
+    Route('/auth/avatar', avatar_image),
     Route('/auth/github/start', github_start),
     Route('/auth/github/link', github_start, methods=['POST']),
     Route('/auth/github/callback', github_callback),

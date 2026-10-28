@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS account_meta(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS users(
  id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL,
  password_hash TEXT NOT NULL, created_at REAL NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS user_profiles(
+ user_id TEXT PRIMARY KEY REFERENCES users(id), bio TEXT NOT NULL DEFAULT '', avatar BLOB,
+ revision INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions(
  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
  expires_at REAL NOT NULL, created_at REAL NOT NULL);
@@ -127,11 +130,11 @@ class Accounts:
         Service(path)
         with self.db() as db:
             has_accounts = db.execute("SELECT 1 FROM sqlite_master WHERE name='account_meta'").fetchone()
-            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] > 4:
+            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] > 5:
                 raise AccessError('账号数据库版本不兼容，请使用匹配版本的应用。')
-            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] == 4:
+            if has_accounts and db.execute('SELECT version FROM account_meta').fetchone()[0] == 5:
                 return
-            if not has_accounts or db.execute('SELECT version FROM account_meta').fetchone()[0] < 4:
+            if not has_accounts or db.execute('SELECT version FROM account_meta').fetchone()[0] < 5:
                 backup = Path(self.path + '.before-accounts-' + uid()[:8] + '.sqlite3')
                 backup.touch(mode=0o600, exist_ok=False)
                 with sqlite3.connect(backup) as target:
@@ -140,7 +143,7 @@ class Accounts:
             # executescript owns its transaction; never execute it inside a caller's transaction.
             db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
             if not db.execute('SELECT 1 FROM account_meta').fetchone():
-                db.execute('INSERT INTO account_meta VALUES (4)')
+                db.execute('INSERT INTO account_meta VALUES (5)')
             if 'kind' not in {r[1] for r in db.execute('PRAGMA table_info(generation_jobs)')}:
                 db.execute("ALTER TABLE generation_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'case_revision'")
                 db.execute("UPDATE generation_jobs SET kind='initial' WHERE case_id='__initial__'")
@@ -149,7 +152,7 @@ class Accounts:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_initial_job ON generation_jobs(project_id,user_id) WHERE kind='initial' AND status IN ('queued','running')")
             if 'password_login' not in {r[1] for r in db.execute('PRAGMA table_info(users)')}:
                 db.execute('ALTER TABLE users ADD COLUMN password_login INTEGER NOT NULL DEFAULT 1')
-            db.execute('UPDATE account_meta SET version=4')
+            db.execute('UPDATE account_meta SET version=5')
         Path(self.path).chmod(0o600)
 
     @contextmanager

@@ -2,6 +2,7 @@
 import streamlit as st
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, ROLE_NAMES, ROLES, OVERRIDES, logout_proof
+from sdlc.web_ui import user_identity
 from sdlc.ui import page_header, section_title, workspace_mode
 
 PERMISSION_NAMES = {'generate': '创建项目与生成', 'edit': '人工编辑', 'review': '审核与澄清',
@@ -48,6 +49,8 @@ def enter(path):
     if st.session_state.get('auth_user') != user['id']:
         st.session_state.clear()
         st.session_state['auth_user'] = user['id']
+    with st.sidebar:
+        st.markdown(user_identity(user), unsafe_allow_html=True)
     spaces = store.spaces(token)
     ids = {s['id'] for s in spaces}
     if not st.session_state.get('_workspace_initialized'):
@@ -100,6 +103,7 @@ def space_navigation(user, token, chosen=None):
             st.rerun()
         if chosen and chosen['kind'] == 'team':
             team_navigation()
+        st.link_button('个人资料', '/auth/profile', width='stretch')
         st.link_button('登录账号与绑定', '/auth/account', width='stretch')
         if user.get('password_login', True):
             st.link_button('修改密码', '/auth/password', width='stretch')

@@ -128,6 +128,11 @@ def apply_style():
     .st-key-clarification_workspace { border-top:3px solid #b77910!important; }
     .st-key-review_result_workspace { border-top:3px solid #0f766e!important; }
     .tc-eyebrow { font-size:11px; font-weight:750; letter-spacing:.12em; margin-bottom:4px; }
+    .tc-profile-entry { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--tc-ink); margin-bottom:12px; }
+    .tc-profile-entry:hover { text-decoration:none; }
+    .tc-profile-entry .tc-avatar { width:44px; height:44px; border-radius:50%; object-fit:cover; border:2px solid white; }
+    .tc-profile-entry strong { display:block; color:var(--tc-ink); font-size:14px; }
+    .tc-profile-entry small { color:var(--tc-muted); font-size:11px; }
     .tc-brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
     .tc-logo { background:#1e3455; color:#fff; padding:10px; border-radius:11px; font-weight:800; letter-spacing:-1px; }
     .tc-brand strong { font-size:19px; color:#1e3455; } .tc-brand small { color:#63748b; display:block; font-size:11px; }
