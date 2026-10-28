@@ -141,9 +141,7 @@ async def auth(request: Request):
             except AccessError:
                 return RedirectResponse('/auth/login', 303)
             # GET never changes login state; only old bookmarks use this confirmation page.
-            body = '<section class="tc-card"><h2 class="tc-section">确认退出</h2><p>退出后需要重新登录才能继续访问项目。</p><form method="post" action="/auth/logout"><input type="hidden" name="logout_proof" value="' + logout_proof(token) + '"><div class="tc-actions"><button class="tc-button primary">退出登录</button>' + web_ui.button('返回工作台', '/') + '</div></form></section>'
-            return web_ui.render('退出当前登录', '确认结束当前登录会话。', body, user=user, token=token,
-                                 scripts=watch_session(user['id'], token))
+            return logout_response(request, user)
         if request.url.path == '/auth/login':
             try:
                 accounts().me(request.cookies.get(COOKIE))
@@ -283,6 +281,17 @@ async def account_page(request):
     return response
 
 
+def logout_response(request, user):
+    token = request.cookies.get(COOKIE)
+    body = ('<section class="tc-card"><h2 class="tc-section">退出当前登录</h2>'
+            '<p class="tc-muted">退出后需要重新登录才能继续访问项目。已保存的项目、用例和个人资料会保留。</p>'
+            '<form method="post" action="/auth/logout" target="_self"><input type="hidden" name="logout_proof" value="'
+            + logout_proof(token) + '"><div class="tc-actions"><button class="tc-button primary">确认退出登录</button>'
+            + web_ui.button('返回个人资料', '/auth/profile') + '</div></form></section>')
+    return web_ui.render('退出当前登录', '管理当前登录会话。', body, user=user, token=token,
+                         active='logout', scripts=watch_session(user['id'], token))
+
+
 def profile_response(request, user, message='', submitted=None):
     store = accounts()
     token = request.cookies.get(COOKIE)
@@ -329,6 +338,13 @@ async def profile_page(request):
     except AccessError:
         return RedirectResponse('/auth/login', 303)
     if request.method == 'GET':
+        section = request.query_params.get('section', 'profile')
+        if section == 'account':
+            return await account_page(request)
+        if section == 'password':
+            return password_response(request, user)
+        if section == 'logout':
+            return logout_response(request, user)
         return profile_response(request, user)
     form = None
     try:

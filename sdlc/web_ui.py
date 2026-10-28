@@ -3,7 +3,6 @@ from html import escape
 
 from starlette.responses import HTMLResponse
 
-from sdlc.accounts import logout_proof
 from sdlc.theme import TOKENS, secondary_buttons
 
 CSS = TOKENS + secondary_buttons('.tc-button.secondary') + '''
@@ -16,22 +15,30 @@ h2 { font-size:20px; line-height:1.4; margin-bottom:10px; }
 h3 { font-size:16px; margin-bottom:8px; }
 p { margin-bottom:16px; }
 .tc-layout { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:100vh; }
-.tc-sidebar { background:var(--tc-sidebar); border-right:1px solid var(--tc-line); padding:32px 22px; }
+.tc-sidebar { position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto; display:flex; flex-direction:column; background:var(--tc-sidebar); border-right:1px solid var(--tc-line); padding:32px 22px; }
 .tc-brand { display:flex; gap:12px; align-items:center; color:#1e3455; text-decoration:none; margin-bottom:32px; }
 .tc-logo { display:grid; place-items:center; width:44px; height:44px; border-radius:11px; background:#1e3455; color:white; font-weight:800; }
 .tc-brand strong { font-size:19px; } .tc-brand small { display:block; font-size:11px; color:var(--tc-muted); }
 .tc-nav { display:grid; gap:6px; margin:24px 0; }
 .tc-nav a { display:block; padding:11px 12px; border-radius:10px; text-decoration:none; color:var(--tc-ink); font-weight:600; }
 .tc-nav a:hover { background:#e1e8f2; } .tc-nav a[aria-current="page"] { background:#1e3455; color:white; }
-.tc-user { border-top:1px solid var(--tc-line); padding-top:20px; margin-top:24px; overflow-wrap:anywhere; }
+.tc-user { padding-top:24px; margin-top:auto; overflow-wrap:anywhere; }
 .tc-avatar { width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid white; background:#dbe7fc; }
 .tc-avatar.large { width:112px; height:112px; margin-bottom:16px; }
-.tc-profile-entry { display:flex; align-items:center; gap:12px; padding:10px 12px; min-height:44px;
- border-radius:10px; text-decoration:none; color:var(--tc-ink); }
-.tc-profile-entry:hover { background:#e1e8f2; }
+.tc-profile-entry { display:flex; align-items:center; gap:12px; padding:12px; min-height:64px;
+ border:1px solid #d8e1ee; border-radius:12px; text-decoration:none; color:var(--tc-ink); background:white;
+ box-shadow:0 3px 12px rgba(30,52,85,.05); }
+.tc-profile-entry:hover { background:#f8fbff; border-color:#a8bce2; }
 .tc-profile-entry:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
-.tc-profile-entry .tc-avatar { width:24px; height:24px; flex-shrink:0; border:0; }
-.tc-profile-entry strong { display:block; font-size:14px; font-weight:600; overflow-wrap:anywhere; } .tc-profile-entry small { color:var(--tc-muted); }
+.tc-profile-entry .tc-avatar { width:38px; height:38px; flex-shrink:0; border:0; }
+.tc-profile-entry strong { display:block; font-size:14px; font-weight:700; overflow-wrap:anywhere; }
+.tc-profile-entry small { display:block; color:var(--tc-muted); font-size:11px; }
+.tc-profile-arrow { margin-left:auto; color:var(--tc-muted); font-size:22px; }
+.tc-settings-nav { display:flex; flex-wrap:wrap; gap:6px; padding:6px; margin-bottom:24px;
+ border:1px solid var(--tc-line); border-radius:12px; background:white; }
+.tc-settings-nav a { padding:10px 16px; border-radius:8px; color:var(--tc-ink); text-decoration:none; font-weight:600; }
+.tc-settings-nav a:hover { background:#edf1f7; }
+.tc-settings-nav a[aria-current="page"] { background:#1e3455; color:white; }
 .tc-user small { display:block; color:var(--tc-muted); margin-bottom:6px; }
 .tc-user form { margin-top:18px; }
 .tc-main { width:100%; max-width:1160px; padding:48px 40px 64px; margin:0 auto; }
@@ -76,7 +83,7 @@ summary { cursor:pointer; color:#244f9b; font-weight:600; } details form { margi
 .tc-list { padding-left:20px; color:var(--tc-muted); } .tc-list li { margin-bottom:12px; }
 @media(max-width:760px) {
  .tc-layout { grid-template-columns:1fr; }
- .tc-sidebar { padding:20px; border-right:0; border-bottom:1px solid var(--tc-line); }
+ .tc-sidebar { position:static; height:auto; align-self:auto; overflow:visible; padding:20px; border-right:0; border-bottom:1px solid var(--tc-line); }
  .tc-sidebar .tc-brand { margin-bottom:12px; } .tc-nav { display:flex; flex-wrap:wrap; margin:12px 0; }
  .tc-user { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding-top:14px; margin-top:14px; }
  .tc-user small { margin:0; } .tc-user form { margin:0 0 0 auto; } .tc-main,.tc-main.guest { padding:24px 16px 40px; }
@@ -86,6 +93,7 @@ summary { cursor:pointer; color:#244f9b; font-weight:600; } details form { margi
 
 
 def button(label, href, primary=False):
+    href = {'/auth/account': '/auth/profile?section=account', '/auth/password': '/auth/profile?section=password'}.get(href, href)
     return f'<a class="tc-button {"primary" if primary else "secondary"}" href="{escape(href, quote=True)}">{escape(label)}</a>'
 
 
@@ -112,14 +120,19 @@ def render(title, description, body, *, user=None, token=None, active='', accent
     brand = '<a class="tc-brand" href="/"><span class="tc-logo">TC</span><span><strong>TraceCase</strong><small>需求与测试工作台</small></span></a>'
     hero = f'<header class="tc-hero"><div class="tc-eyebrow">{"账号设置" if user else "需求与测试复核"}</div><h1>{escape(title)}</h1><p>{escape(description)}</p></header>'
     if user:
-        nav = ''
-        for key, label, path in [('workspace', '返回工作台', '/'), ('profile', '个人资料', '/auth/profile'), ('account', '登录账号与绑定', '/auth/account'), ('password', '修改密码', '/auth/password')]:
-            if key == 'password' and not user.get('password_login', True):
-                continue
-            current = ' aria-current="page"' if active == key else ''
-            nav += f'<a href="{path}"{current}>{label}</a>'
-        logout = '<form method="post" action="/auth/logout"><input type="hidden" name="logout_proof" value="' + logout_proof(token) + '"><button class="tc-button secondary">退出登录</button></form>'
-        sidebar = '<aside class="tc-sidebar">' + brand + '<nav class="tc-nav" aria-label="账号导航">' + nav + '</nav><div class="tc-user">' + logout + user_identity(user) + '</div></aside>'
+        settings = active in {'profile', 'account', 'password', 'logout'}
+        nav = '<a href="/">返回工作台</a><a href="/auth/profile"' + (' aria-current="page"' if settings else '') + '>个人资料</a>'
+        sidebar = '<aside class="tc-sidebar">' + brand + '<nav class="tc-nav" aria-label="工作台导航">' + nav + '</nav><div class="tc-user">' + user_identity(user) + '</div></aside>'
+        if settings:
+            menu = ''
+            for key, label, href in [('profile', '个人资料', '/auth/profile'),
+                                      ('account', '登录账号与绑定', '/auth/profile?section=account'),
+                                      ('password', '修改密码', '/auth/profile?section=password'),
+                                      ('logout', '退出登录', '/auth/profile?section=logout')]:
+                if key == 'password' and not user.get('password_login', True):
+                    continue
+                menu += '<a href="' + href + '"' + (' aria-current="page"' if active == key else '') + '>' + label + '</a>'
+            body = '<nav class="tc-settings-nav" aria-label="个人资料功能">' + menu + '</nav>' + body
         content = '<div class="tc-layout">' + sidebar + '<main class="tc-main">' + hero + body + '</main></div>'
     else:
         content = '<main class="tc-main guest"><div class="tc-guest-brand">' + brand + '</div>' + hero + body + '</main>'
@@ -133,4 +146,4 @@ def render(title, description, body, *, user=None, token=None, active='', accent
 def user_identity(user):
     return ('<a class="tc-profile-entry" href="/auth/profile" target="_self" aria-label="查看个人资料" title="个人资料">'
             '<img class="tc-avatar" src="/auth/avatar" alt="我的头像">'
-            '<span><strong>' + escape(user['display_name']) + '</strong></span></a>')
+            '<span><strong>' + escape(user['display_name']) + '</strong><small>个人资料与账号设置</small></span><span class="tc-profile-arrow" aria-hidden="true">›</span></a>')

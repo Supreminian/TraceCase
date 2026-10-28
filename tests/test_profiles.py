@@ -149,3 +149,27 @@ def test_account_v4_migrates_profiles_without_invalidating_sessions(context):
         assert not db.execute('PRAGMA foreign_key_check').fetchall()
     with pytest.raises(AccessError):
         profiles.save_profile(upgraded, 'invalid-session', 'Bad', '', 0)
+
+
+def test_profile_hub_sections_share_local_menu_and_logout_requires_confirmation(context):
+    from sdlc.accounts import logout_proof
+    store, alice, _ = context
+    with TestClient(gateway.app) as client:
+        sign_in(client, alice)
+        for section, label, expected in [
+            ('account', '登录账号与绑定', 'GitHub 账号绑定'),
+            ('password', '修改密码', 'action="/auth/password"'),
+            ('logout', '退出登录', '确认退出登录'),
+        ]:
+            response = client.get('/auth/profile', params={'section': section})
+            assert response.status_code == 200
+            assert 'aria-label="个人资料功能"' in response.text
+            assert f'aria-current="page">{label}</a>' in response.text
+            assert expected in response.text
+            assert store.me(alice)
+        response = client.get('/auth/profile?section=logout')
+        assert logout_proof(alice) in response.text and alice not in response.text
+        result = client.post('/auth/logout', data={'logout_proof': logout_proof(alice)},
+                             headers={'Origin': 'null', 'Sec-Fetch-Site': 'same-origin'}, follow_redirects=False)
+        assert result.status_code == 303
+        assert client.get('/auth/profile', follow_redirects=False).headers['location'] == '/auth/login'

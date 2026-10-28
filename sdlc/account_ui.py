@@ -49,6 +49,8 @@ def enter(path):
     if st.session_state.get('auth_user') != user['id']:
         st.session_state.clear()
         st.session_state['auth_user'] = user['id']
+    with st.sidebar:
+        st.markdown('<div class="tc-sidebar-footer">' + user_identity(user) + '</div>', unsafe_allow_html=True)
     spaces = store.spaces(token)
     ids = {s['id'] for s in spaces}
     if not st.session_state.get('_workspace_initialized'):
@@ -102,11 +104,6 @@ def space_navigation(user, token, chosen=None):
             st.rerun()
         if chosen and chosen['kind'] == 'team':
             team_navigation()
-        st.link_button('登录账号与绑定', '/auth/account', width='stretch')
-        if user.get('password_login', True):
-            st.link_button('修改密码', '/auth/password', width='stretch')
-        logout_control(token)
-        st.markdown(user_identity(user), unsafe_allow_html=True)
 
 
 def set_team_management(enabled):

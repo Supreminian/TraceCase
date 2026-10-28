@@ -112,7 +112,7 @@ else:
     assert app.session_state['current_project'] == 'existing-project'
 
 
-def test_work_mode_picker_shares_space_navigation_and_has_single_sidebar_logout(context):
+def test_work_mode_picker_has_docked_profile_and_no_separate_account_actions(context):
     store, token = context
     app = AppTest.from_string(f'''
 from unittest.mock import patch
@@ -126,7 +126,9 @@ with patch('sdlc.account_ui.st.context') as browser_context:
     assert app.title[0].value == '选择工作方式'
     assert app.sidebar.button(key='switch_workspace')
     labels = [item.proto.label for item in app.sidebar.get('link_button')]
-    assert labels == ['登录账号与绑定', '修改密码']
-    assert len(app.get('html')) == len(app.sidebar.get('html')) == 1
-    assert 'action="/auth/logout"' in app.sidebar.get('html')[0].proto.body
+    assert labels == []
+    assert not app.get('html')
+    dock = [item.value for item in app.sidebar.markdown if 'tc-sidebar-footer' in item.value]
+    assert len(dock) == 1 and '查看个人资料' in dock[0]
+    assert 'action="/auth/logout"' not in dock[0]
     assert not any(widget.key == 'page' for widget in app.radio)

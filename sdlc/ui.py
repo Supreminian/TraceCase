@@ -27,10 +27,10 @@ def apply_style():
     /* The sidebar menu scrolls independently of its persistent footer. */
     [data-testid="stSidebarContent"] { display:flex; flex-direction:column; height:100%; overflow:hidden; }
     [data-testid="stSidebarHeader"] { flex-shrink:0; }
-    [data-testid="stSidebarUserContent"] { flex:1; min-height:0; overflow-y:auto; padding-bottom:88px; }
+    [data-testid="stSidebarUserContent"] { flex:1; min-height:0; overflow-y:auto; padding-bottom:120px; }
     [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.tc-sidebar-footer) {
-      position:absolute; bottom:0; left:0; right:0; z-index:3; width:100%; min-height:56px;
-      background:#edf1f7; border-top:1px solid var(--tc-line); padding:16px 20px; margin:0; }
+      position:absolute; bottom:0; left:0; right:0; z-index:3; width:100%; min-height:100px;
+      background:#edf1f7; border-top:1px solid var(--tc-line); padding:12px 16px; margin:0; }
     .tc-sidebar-footer { color:var(--tc-muted); font-size:12px; line-height:1.65; }
     /* Navigation keeps keyboard/radio semantics, without form-control circles. */
     .st-key-page [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) { display:none; }
@@ -127,11 +127,17 @@ def apply_style():
     .st-key-clarification_workspace { border-top:3px solid #b77910!important; }
     .st-key-review_result_workspace { border-top:3px solid #0f766e!important; }
     .tc-eyebrow { font-size:11px; font-weight:750; letter-spacing:.12em; margin-bottom:4px; }
-    .tc-profile-entry { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--tc-ink); margin:0; }
-    .tc-profile-entry:hover { text-decoration:none; }
-    .tc-profile-entry .tc-avatar { width:24px; height:24px; border-radius:50%; object-fit:cover; flex-shrink:0; }
-    .tc-profile-entry strong { display:block; color:var(--tc-ink); font-size:14px; font-weight:600; overflow-wrap:anywhere; }
-    .tc-profile-entry small { color:var(--tc-muted); font-size:11px; }
+    .stApp [data-testid="stSidebar"] .tc-profile-entry {
+      display:flex; align-items:center; gap:12px; padding:12px; margin:0;
+      text-decoration:none; background:#fff; border:1px solid #d8e1ee; border-radius:12px;
+      box-shadow:0 3px 12px rgba(30,52,85,.05); color:var(--tc-ink); }
+    .stApp [data-testid="stSidebar"] .tc-profile-entry:hover {
+      background:#f8fbff; border-color:#a8bce2; text-decoration:none; }
+    .tc-profile-entry:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+    .tc-profile-entry .tc-avatar { width:38px; height:38px; border-radius:50%; object-fit:cover; flex-shrink:0; }
+    .tc-profile-entry strong { display:block; color:var(--tc-ink); font-size:14px; font-weight:700; overflow-wrap:anywhere; }
+    .tc-profile-entry small { display:block; color:var(--tc-muted); font-size:11px; }
+    .tc-profile-entry .tc-profile-arrow { margin-left:auto; color:#63748b; font-size:22px; }
     .tc-brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
     .tc-logo { background:#1e3455; color:#fff; padding:10px; border-radius:11px; font-weight:800; letter-spacing:-1px; }
     .tc-brand strong { font-size:19px; color:#1e3455; } .tc-brand small { color:#63748b; display:block; font-size:11px; }
