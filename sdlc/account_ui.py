@@ -169,11 +169,20 @@ def team_entry_dialog(store, token, mode):
     team_entry_form(store, token, mode)
 
 
+def workspace_entry_card(store, token, space, *, title, description, label, key, button_key=None, status=''):
+    with st.container(border=True, key=key):
+        section_title(title, description, 'review')
+        if status:
+            st.caption(status)
+        if st.button(label, key=button_key, type='primary', width='stretch'):
+            select_workspace(store, token, space['id'])
+
+
 def personal_entry(store, token, spaces):
-    with st.container(border=True, key='workspace_personal'):
-        section_title('个人工作', '生成 → 逐条审核 → 定向修订 → 批准导出', 'review')
-        if st.button('进入我的个人空间', type='primary', width='stretch'):
-            select_workspace(store, token, next(s['id'] for s in spaces if s['kind'] == 'personal'))
+    space = next(s for s in spaces if s['kind'] == 'personal')
+    workspace_entry_card(store, token, space, title='个人工作',
+                         description='生成 → 逐条审核 → 定向修订 → 批准导出',
+                         label='进入我的个人空间', key='workspace_personal')
 
 
 def workspace_picker(store, token, spaces):
@@ -182,7 +191,7 @@ def workspace_picker(store, token, spaces):
     if not teams:
         team_entry, personal = st.columns([1.618, 1], gap='large')
         with team_entry, st.container(border=True, key='workspace_team_empty'):
-            section_title('创建或加入一个团队', '你还没有加入团队。创建团队，或通过邀请码申请加入。', 'analysis')
+            section_title('团队协作', '你还没有加入团队。创建团队，或通过邀请码申请加入。', 'review')
             choice = st.radio('团队入口', ['创建团队', '加入团队'], horizontal=True)
             team_entry_form(store, token, 'create' if choice == '创建团队' else 'join')
         with personal:
@@ -192,13 +201,11 @@ def workspace_picker(store, token, spaces):
     with team_list:
         section_title('我的团队', f'共 {len(teams)} 个团队，选择团队继续协作。', 'analysis')
         for space in teams:
-            with st.container(border=True, key='workspace_team_card_' + space['id']):
-                st.text(space['name'])
-                st.caption(ROLE_NAMES[space['role']] + (' · 已归档，仅可查阅' if space['archived'] else ' · 协作中'))
-                if space['description']:
-                    st.text(space['description'])
-                if st.button('进入团队', key='space_' + space['id']):
-                    select_workspace(store, token, space['id'])
+            workspace_entry_card(store, token, space, title=space['name'],
+                                 description=space['description'] or '共享需求与用例，按角色协同审核。',
+                                 label='进入团队', key='workspace_team_card_' + space['id'],
+                                 button_key='space_' + space['id'],
+                                 status=ROLE_NAMES[space['role']] + (' · 已归档，仅可查阅' if space['archived'] else ' · 协作中'))
     with actions:
         personal_entry(store, token, spaces)
         with st.container(border=True, key='workspace_team_actions'):
