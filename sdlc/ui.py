@@ -10,7 +10,8 @@ from sdlc.theme import TOKENS, secondary_buttons
 
 
 TONES = {'input': '#2563eb', 'review': '#0f766e', 'clarify': '#b77910',
-         'export': '#7c3aed', 'workspace': '#334155', 'analysis': '#4f46e5'}
+         'export': '#7c3aed', 'workspace': '#334155', 'analysis': '#4f46e5',
+         'team': 'var(--tc-team)', 'personal': 'var(--tc-personal)'}
 
 
 def apply_style():
@@ -81,8 +82,8 @@ def apply_style():
     @media(prefers-reduced-motion:reduce) {
       .tc-generation-spinner,.tc-generation-track::after { animation:none; }
     }
-    .tc-mode { --mode-accent:#0f766e; --mode-bg:#e8f5f1; --mode-line:#b9ddd3; }
-    .tc-mode.personal { --mode-accent:#1d4ed8; --mode-bg:#eff6ff; --mode-line:#c7d9fa; }
+    .tc-mode { --mode-accent:var(--tc-team); --mode-bg:#e8f5f1; --mode-line:#b9ddd3; }
+    .tc-mode.personal { --mode-accent:var(--tc-personal); --mode-bg:#eff6ff; --mode-line:#c7d9fa; }
     .tc-mode-banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px;
       border:1px solid var(--mode-line); border-left:4px solid var(--mode-accent);
       background:var(--mode-bg); padding:12px 18px; margin-bottom:18px; border-radius:10px; }
@@ -117,7 +118,11 @@ def apply_style():
     [class*="st-key-extraction_"],.st-key-export_workspace,.st-key-clarification_workspace,.st-key-review_result_workspace { background:#fff; padding:22px; border-radius:14px; }
     .st-key-workspace_personal,.st-key-workspace_team_empty,[class*="st-key-workspace_team_card_"] {
       padding:18px; max-width:360px; }
-    .st-key-workspace_team_actions { max-width:360px; }
+    .st-key-workspace_team_actions { padding:16px 18px; background:#f0f7f6; border-color:#c9ded9!important; border-radius:14px; }
+    .st-key-workspace_team_actions [data-testid="stCaptionContainer"] { margin-bottom:4px; }
+    .st-key-workspace_mode_choices_single { max-width:760px; }
+    .st-key-workspace_mode_choices_many { max-width:1080px; }
+
     [class*="st-key-workspace_team_card_"] [data-testid="stCaptionContainer"] p {
       display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
     [class*="st-key-workspace_team_card_"] .tc-section { overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }

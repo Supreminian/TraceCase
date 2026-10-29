@@ -2,6 +2,7 @@
 TOKENS = '''
 :root {
   --tc-ink:#18283e; --tc-muted:#63748b; --tc-line:#e1e7ef;
+  --tc-team:#0f766e; --tc-personal:#1d4ed8;
   --tc-primary:#2563eb; --tc-bg:#f4f6fa; --tc-panel:#fff; --tc-sidebar:#edf1f7;
 }
 '''
