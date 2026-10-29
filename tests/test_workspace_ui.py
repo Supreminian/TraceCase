@@ -38,7 +38,8 @@ def button(app, label):
 def test_no_team_shows_first_team_form_and_creates_owner(context):
     store, token = context
     app = picker(store, token)
-    assert not any(b.key == 'open_create_team' for b in app.button)
+    assert not app.text_input
+    app.button(key='open_create_team').click().run()
     next(t for t in app.text_input if t.label == '团队名称').input('第一个团队')
     button(app, '创建团队并进入').click().run()
     assert not app.exception
@@ -132,3 +133,19 @@ with patch('sdlc.account_ui.st.context') as browser_context:
     assert len(dock) == 1 and '查看个人资料' in dock[0]
     assert 'action="/auth/logout"' not in dock[0]
     assert not any(widget.key == 'page' for widget in app.radio)
+
+
+def test_team_grid_paginates_without_losing_entry_access(context):
+    store, token = context
+    for index in range(5):
+        store.create_team(token, f'团队 {index + 1}')
+    app = picker(store, token)
+    assert len([b for b in app.button if (b.key or '').startswith('space_')]) == 4
+    assert app.button(key='teams_previous').disabled
+    app.button(key='teams_next').click().run()
+    assert not app.exception
+    assert len([b for b in app.button if (b.key or '').startswith('space_')]) == 1
+    assert app.button(key='teams_next').disabled
+    button(app, '进入团队').click().run()
+    assert not app.exception
+    assert store.preferred_space(token) == app.session_state['active_workspace']

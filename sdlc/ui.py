@@ -111,10 +111,21 @@ def apply_style():
     .st-key-header_workspace { border-left:5px solid #334155; }
     .st-key-header_export { border-left:5px solid #7c3aed; }
     .st-key-header_analysis { border-left:5px solid #4f46e5; }
-    .st-key-workspace_personal,.st-key-workspace_team_empty,.st-key-workspace_team_actions,
+    .st-key-workspace_personal,.st-key-workspace_team_empty,
     [class*="st-key-workspace_team_card_"],.st-key-project_empty,.st-key-project_create_action,.st-key-prd_input,.st-key-generation_summary,[class*="st-key-case_body_"],
     [class*="st-key-case_source_panel_"],[class*="st-key-review_actions_"],
     [class*="st-key-extraction_"],.st-key-export_workspace,.st-key-clarification_workspace,.st-key-review_result_workspace { background:#fff; padding:22px; border-radius:14px; }
+    .st-key-workspace_personal,.st-key-workspace_team_empty,[class*="st-key-workspace_team_card_"] {
+      padding:18px; max-width:360px; }
+    .st-key-workspace_team_actions { max-width:360px; }
+    [class*="st-key-workspace_team_card_"] [data-testid="stCaptionContainer"] p {
+      display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+    [class*="st-key-workspace_team_card_"] .tc-section { overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+    @media(max-width:1050px) {
+      .st-key-workspace_team_list [data-testid="stHorizontalBlock"]:has([class*="st-key-workspace_team_card_"]) { flex-wrap:wrap; }
+      .st-key-workspace_team_list [data-testid="stHorizontalBlock"]:has([class*="st-key-workspace_team_card_"]) > [data-testid="stColumn"] {
+        flex:1 1 100%!important; width:100%!important; }
+    }
     .st-key-prd_input { border-top:3px solid #2563eb!important; }
     .st-key-generation_summary { border-top:3px solid #4f46e5!important; }
     [class*="st-key-case_body_"] { border-top:3px solid #0f766e!important; }
@@ -178,7 +189,7 @@ def page_header(title, description, tone='workspace', eyebrow='项目工作台')
 
 
 def section_title(title, description='', tone='input'):
-    st.markdown(f'<div class="tc-section"><span style="background:{TONES[tone]}"></span>{escape(title)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="tc-section" title="{escape(title, quote=True)}"><span style="background:{TONES[tone]}"></span>{escape(title)}</div>', unsafe_allow_html=True)
     if description:
         st.caption(description)
 

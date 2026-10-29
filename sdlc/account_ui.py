@@ -185,37 +185,60 @@ def personal_entry(store, token, spaces):
                          label='进入我的个人空间', key='workspace_personal')
 
 
+TEAMS_PER_PAGE = 4
+
+
+def team_entry_actions(*, primary=False):
+    create, join = st.columns(2, gap='small')
+    if create.button('创建团队', key='open_create_team', width='stretch', type='primary' if primary else 'secondary'):
+        close_team_entry()
+        st.session_state['_team_entry'] = 'create'
+    if join.button('加入团队', key='open_join_team', width='stretch'):
+        close_team_entry()
+        st.session_state['_team_entry'] = 'join'
+
+
+def change_team_page(page):
+    st.session_state['team_page'] = page
+
+
 def workspace_picker(store, token, spaces):
-    page_header('选择工作方式', '个人工作独立保存；团队协作共享项目，由管理员分配权限。', 'workspace', '工作空间')
+    page_header('选择工作方式', '选择一个团队继续协作，或进入个人空间独立工作。', 'workspace', '工作空间')
     teams = [space for space in spaces if space['kind'] == 'team']
-    if not teams:
-        team_entry, personal = st.columns([1.618, 1], gap='large')
-        with team_entry, st.container(border=True, key='workspace_team_empty'):
-            section_title('团队协作', '你还没有加入团队。创建团队，或通过邀请码申请加入。', 'review')
-            choice = st.radio('团队入口', ['创建团队', '加入团队'], horizontal=True)
-            team_entry_form(store, token, 'create' if choice == '创建团队' else 'join')
-        with personal:
-            personal_entry(store, token, spaces)
-        return
-    team_list, actions = st.columns([1.618, 1], gap='large')
-    with team_list:
-        section_title('我的团队', f'共 {len(teams)} 个团队，选择团队继续协作。', 'analysis')
-        for space in teams:
-            workspace_entry_card(store, token, space, title=space['name'],
-                                 description=space['description'] or '共享需求与用例，按角色协同审核。',
-                                 label='进入团队', key='workspace_team_card_' + space['id'],
-                                 button_key='space_' + space['id'],
-                                 status=ROLE_NAMES[space['role']] + (' · 已归档，仅可查阅' if space['archived'] else ' · 协作中'))
-    with actions:
+    team_list, personal = st.columns([1.618, 1], gap='large')
+    with team_list, st.container(key='workspace_team_list'):
+        section_title('团队协作', f'已加入 {len(teams)} 个团队' if teams else '与协作者共享项目和审核进度', 'review')
+        if not teams:
+            with st.container(border=True, key='workspace_team_empty'):
+                section_title('创建或加入团队', '创建你的团队，或使用邀请码申请加入已有团队。', 'review')
+                team_entry_actions(primary=True)
+        else:
+            pages = max(1, (len(teams) + TEAMS_PER_PAGE - 1) // TEAMS_PER_PAGE)
+            page = min(max(1, st.session_state.get('team_page', 1)), pages)
+            st.session_state['team_page'] = page
+            visible = teams[(page - 1) * TEAMS_PER_PAGE:page * TEAMS_PER_PAGE]
+            for offset in range(0, len(visible), 2):
+                row = visible[offset:offset + 2]
+                columns = st.columns(2, gap='small') if len(teams) > 1 else [st.container()]
+                for col, space in zip(columns, row):
+                    with col:
+                        workspace_entry_card(store, token, space, title=space['name'],
+                                             description=space['description'] or '共享需求与用例，按角色协同审核。',
+                                             label='进入团队', key='workspace_team_card_' + space['id'],
+                                             button_key='space_' + space['id'],
+                                             status=ROLE_NAMES[space['role']] + (' · 已归档，仅可查阅' if space['archived'] else ' · 协作中'))
+            if pages > 1:
+                previous, counter, following = st.columns([1, 1, 1], gap='small')
+                previous.button('上一页', key='teams_previous', disabled=page == 1,
+                                on_click=change_team_page, args=(page - 1,), width='stretch')
+                counter.caption(f'第 {page} / {pages} 页')
+                following.button('下一页', key='teams_next', disabled=page == pages,
+                                 on_click=change_team_page, args=(page + 1,), width='stretch')
+            with st.container(key='workspace_team_actions'):
+                team_entry_actions()
+    with personal:
+        section_title('个人空间', '独立生成、审核和导出测试用例', 'review')
         personal_entry(store, token, spaces)
-        with st.container(border=True, key='workspace_team_actions'):
-            section_title('更多团队', '创建新团队，或申请加入其他团队。', 'analysis')
-            if st.button('创建团队', key='open_create_team', width='stretch'):
-                close_team_entry()
-                st.session_state['_team_entry'] = 'create'
-            if st.button('加入其他团队', key='open_join_team', width='stretch'):
-                close_team_entry()
-                st.session_state['_team_entry'] = 'join'
     mode = st.session_state.get('_team_entry')
     if mode in {'create', 'join'}:
         team_entry_dialog(store, token, mode)
