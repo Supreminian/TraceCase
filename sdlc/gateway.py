@@ -15,7 +15,7 @@ from starlette.routing import Route, WebSocketRoute
 import websockets
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, SESSION_SECONDS, logout_proof, session_marker
-from sdlc import github_auth, web_ui, profiles
+from sdlc import github_auth, web_ui, profiles, profile_ui
 
 DB_PATH = os.environ.get('SDLC_DB_PATH', str(Path(__file__).resolve().parents[1] / 'data/sdlc.sqlite3'))
 UPSTREAM = 'http://127.0.0.1:' + os.environ.get('SDLC_PRIVATE_PORT', '8502')
@@ -313,11 +313,10 @@ def profile_response(request, user, message='', submitted=None):
             + escape(display_name, quote=True) + '"><small>用于导航栏与新产生的操作记录，最多 40 个字符。</small></div>'
             + '<div class="tc-field"><label class="tc-label" for="bio">个人简介</label><textarea id="bio" name="bio" maxlength="500" placeholder="介绍你的工作方向或协作习惯…">'
             + escape(bio) + '</textarea><small>选填，最多 500 个字符。</small></div>'
-            + '<div class="tc-field"><label class="tc-label" for="avatar">上传头像</label><input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp">'
-            + '<small>PNG / JPEG / WebP，最多 2 MiB。保存后自动居中裁切为正方形；不选择文件则保留现有头像。</small></div>')
+            + profile_ui.avatar_picker())
     if profile['has_avatar']:
-        body += '<label><input type="checkbox" name="remove_avatar" value="1" style="width:auto;min-height:auto"> 恢复默认头像</label>'
-    body += ('<div class="tc-actions"><button class="tc-button primary">保存个人资料</button>' + web_ui.button('返回工作台', '/')
+        body += '<label><input type="checkbox" id="remove-avatar" name="remove_avatar" value="1" style="width:auto;min-height:auto"> 恢复默认头像</label>'
+    body += ('<div class="tc-actions"><button id="profile-save" class="tc-button primary">保存个人资料</button>' + web_ui.button('返回工作台', '/')
              + '</div></form></section><aside class="tc-card"><h2 class="tc-section">当前资料</h2>'
              + '<img class="tc-avatar large" src="/auth/avatar" alt="当前头像"><h3>' + escape(profile['display_name']) + '</h3>'
              + '<p class="tc-muted">' + escape(profile['bio'] or '还没有填写个人简介。') + '</p>'
@@ -325,7 +324,7 @@ def profile_response(request, user, message='', submitted=None):
              + '<div class="tc-actions">' + web_ui.button('登录账号与绑定', '/auth/account') + '</div></aside></div>')
     response = web_ui.render('个人资料', '设置头像和个人介绍，让工作空间里的身份更清晰。', body,
                              user=profile, token=token, active='profile', accent='#4f46e5',
-                             scripts=watch_session(user['id'], token))
+                             scripts=watch_session(user['id'], token) + profile_ui.AVATAR_PREVIEW_SCRIPT)
     response.set_cookie('tracecase_csrf', csrf, httponly=True, secure=SECURE, samesite='strict', max_age=3600)
     return response
 
