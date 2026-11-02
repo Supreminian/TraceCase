@@ -19,8 +19,10 @@ def main():
     child = subprocess.Popen([sys.executable, '-m', 'streamlit', 'run', str(root / 'app.py'),
                               '--server.address', '127.0.0.1', '--server.port', os.environ.get('SDLC_PRIVATE_PORT', '8502'),
                               '--server.enableXsrfProtection', 'true', '--server.enableCORS', 'true'])
+    worker_child = subprocess.Popen([sys.executable, str(root / 'scripts' / 'run_agent_worker.py')])
     def shutdown(*_):
         child.terminate()
+        worker_child.terminate()
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, shutdown)
     try:
@@ -28,12 +30,18 @@ def main():
         from sdlc.gateway import app
         uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('SDLC_GATEWAY_PORT', '8501')), log_level='warning', access_log=False)
     finally:
+        worker_child.terminate()
         child.terminate()
         try:
             child.wait(timeout=10)
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait()
+        try:
+            worker_child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            worker_child.kill()
+            worker_child.wait()
 
 
 if __name__ == '__main__':

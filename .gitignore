@@ -21,3 +21,4 @@ htmlcov/
 *.p12
 *.pfx
 *.log
+tmp/

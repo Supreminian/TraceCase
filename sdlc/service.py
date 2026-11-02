@@ -702,6 +702,9 @@ class Service:
         with self.connection() as db:
             return self._gate(db, run_id)
 
+    def _delivery_details(self, db, run_id, cases):
+        return {}
+
     def export(self, run_id, format, operator, expected_run_revision, request_id):
         operator, _ = actor_reason(operator)
         if format not in {"csv", "md"}:
@@ -725,6 +728,7 @@ class Service:
                     raise ServiceError("缺少当前版本的批准事件。")
                 approvals[c["case_id"]] = dict(event)
             export_id = identifier()
+            run['delivery_details'] = self._delivery_details(db, run_id, cases)
             content, mime = render_export(run, cases, approvals, export_id, format)
             filename = f"approved-{self.project_id[:8]}-{run_id[:8]}-{export_id[:8]}.{format}"
             snapshot = [{"case_id": c["case_id"], "version": c["version"],

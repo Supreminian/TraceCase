@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 import inspect
+import json
 import time
 
 from sdlc.accounts import Accounts, AccessError
@@ -144,10 +145,49 @@ class Service(Engine):
 
     def _gate(self, db, run_id):
         issues = super()._gate(db, run_id)
+        config = self._run(db, run_id)['config'] or {}
+        is_agent_run = config.get('mode') == 'staged-agent' or config.get('provider') == 'testing-agent-aggregate'
+        publication = None
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='testing_agent_publications'").fetchone():
+            publication = db.execute('SELECT complete,task_id FROM testing_agent_publications WHERE run_id=?', (run_id,)).fetchone()
+            if publication and not publication['complete']:
+                issues.append('测试任务仍有尚未完成的生成或覆盖范围，部分成果可评审，不能导出完整批准版本。')
+            if publication and db.execute("""SELECT 1 FROM testing_agent_questions
+                WHERE task_id=? AND status NOT IN ('confirmed','false_positive')
+                AND json_extract(content_json,'$.blocking')=1""", (publication['task_id'],)).fetchone():
+                issues.append('测试任务仍有未处置的阻断问题，请处理并重新发布当前成果。')
+            if publication and self._capability == 'export':
+                baselines = db.execute('SELECT snapshot_json FROM testing_agent_baselines WHERE task_id=? AND run_id=?',
+                                      (publication['task_id'], run_id)).fetchall()
+                current_cases = self._cases(db, run_id)
+                if not any(json.loads(row['snapshot_json']).get('cases') == current_cases for row in baselines):
+                    issues.append('当前 Agent 用例集合尚无匹配的批准基线，请在测试任务交付区建立基线。')
+            if publication and db.execute("SELECT 1 FROM testing_agent_artifacts WHERE task_id=? AND kind='evidence_policy'", (publication['task_id'],)).fetchone():
+                import hashlib
+                reviewed = set()
+                for item in db.execute("SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind='evidence_review'", (publication['task_id'],)):
+                    reviewed.update(json.loads(item['content_json']).get('reviewed_case_hashes', {}).values())
+                if any(hashlib.sha256(dumps(case['content']).encode()).hexdigest() not in reviewed for case in self._cases(db, run_id)):
+                    issues.append('当前用例版本尚未完成依据复核，请继续任务完成复核后交付。')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_work_items'").fetchone():
+                if db.execute("""SELECT 1 FROM agent_work_items j JOIN testing_agent_publications p ON p.task_id=j.task_id
+                    WHERE p.run_id=? AND j.status IN ('queued','running')""", (run_id,)).fetchone():
+                    issues.append('本轮 Agent 仍在处理或检查，请等待任务结束后建立基线和导出。')
+        if is_agent_run and publication is None:
+            issues.append('此 Agent 成果尚未完成任务关联，请回到测试任务继续发布，暂不能导出。')
         if db.execute("SELECT 1 FROM generation_jobs WHERE workspace_id=? AND run_id=? AND status IN ('queued','running')",
                       (self.workspace_id, run_id)).fetchone():
             issues.append('仍有用例正在重新生成，请等待完成或人工处理冲突后导出。')
         return issues
+
+    def _delivery_details(self, db, run_id, cases):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='testing_agent_baselines'").fetchone():
+            for row in db.execute('SELECT id,snapshot_json FROM testing_agent_baselines WHERE run_id=? ORDER BY created_at DESC', (run_id,)):
+                snapshot = json.loads(row['snapshot_json'])
+                if snapshot['cases'] == cases:
+                    return {'baseline_id': row['id'], **{k: snapshot.get(k) for k in
+                            ('task_id', 'document_version', 'scope', 'case_details')}}
+        return {}
 
     def _admit_generation(self, db):
         active = db.execute("""SELECT COUNT(*) FROM runs r JOIN project_workspaces p ON p.project_id=r.project_id

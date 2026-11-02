@@ -28,9 +28,9 @@ def test_first_project_creation_and_empty_workspace(tmp_path, monkeypatch):
     assert not app.exception
     project_id = app.selectbox(key='current_project').value
     assert Service(path).get_project(project_id)['name'] == '报销审批项目'
-    assert app.radio(key='page').value == '项目概览'
-    assert app.button(key='project_generate')
-    app.button(key='project_generate').click().run()
+    assert app.radio(key='page').value == '测试任务'
+    assert next(b for b in app.button if b.label == '开始测试准备')
+    app.radio(key='page').set_value('新建运行').run()
     assert app.radio(key='page').value == '新建运行'
 
 
@@ -46,7 +46,7 @@ def test_existing_projects_show_cards_and_create_on_demand(tmp_path, monkeypatch
     app.text_input(key='new_project_name').input('第二个项目')
     next(button for button in app.button if button.label == '新建项目').click().run()
     assert not app.exception
-    assert app.radio(key='page').value == '项目概览'
+    assert app.radio(key='page').value == '测试任务'
     assert admin.get_project(app.selectbox(key='current_project').value)['name'] == '第二个项目'
     assert len(admin.list_projects()) == 2
 
@@ -152,7 +152,7 @@ def test_clearing_project_hides_project_navigation(tmp_path, monkeypatch):
     app = app_for(path, monkeypatch)
     assert not any(widget.key == 'page' for widget in app.radio)
     app.selectbox(key='current_project').select(project).run()
-    assert app.radio(key='page').value == '项目概览'
+    assert app.radio(key='page').value == '测试任务'
     app.selectbox(key='current_project').select(None).run()
     assert not app.exception
     assert not any(widget.key == 'page' for widget in app.radio)
