@@ -12,3 +12,12 @@ evaluation/results/
 htmlcov/
 *.sqlite3
 *.sqlite3-*
+
+# Keep local credentials and generated artifacts out of the public repository.
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
