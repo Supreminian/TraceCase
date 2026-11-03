@@ -75,4 +75,4 @@ FEEDBACK_ROUTES = {
 }
 
 TASK_STATUSES = {'queued', 'running', 'waiting_answer', 'waiting_review', 'partial',
-                 'completed', 'failed', 'cancelled'}
+                 'waiting_confirmation', 'completed', 'failed', 'cancelled'}

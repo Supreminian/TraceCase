@@ -31,18 +31,33 @@ workspace(s)
     return app
 
 
+def test_budget_stop_keeps_old_questions_as_history_without_repeating_answer_forms(tmp_path):
+    from sdlc.testing_agent.chat import ChatService
+    from tests.test_testing_agent import analysis
+    service = setup(tmp_path / 'budget-ui.sqlite3')
+    task_id = service.create_task(TEXT)
+    service.save_analysis(task_id, analysis(ambiguous=True))
+    service.submit_answer(task_id, 'Q1', '保留这条尚未确认的原始答复。', expected_revision=1)
+    before = service.get_task(task_id)['questions']
+    ChatService(service).request_confirmation(task_id, kind='budget_exhausted')
+    app = show(service)
+    assert any(button.label == '创建新一轮继续' for button in app.button)
+    assert any(expander.label == '上一轮未解决的问题与答复' for expander in app.expander)
+    assert not any(button.label == '确认本轮答复并继续' for button in app.button)
+    assert service.get_task(task_id)['questions'] == before
+
+
 def test_empty_task_board_creates_durable_work_without_network(tmp_path):
     service = setup(tmp_path / 'ui.sqlite3')
     app = show(service)
-    assert app.title[0].value == '项目测试任务'
-    app.text_area(key='agent_prd_text_' + service.project_id).input(TEXT)
-    next(b for b in app.button if b.label == '开始测试准备').click().run()
+    assert any('测试协作对话' in m.value for m in app.markdown)
+    app.chat_input(key='agent_new_chat_' + service.project_id).set_value(TEXT).run()
     assert not app.exception
     tasks = service.list_tasks()
     assert len(tasks) == 1
     with service.accounts.db() as db:
         assert db.execute("SELECT status FROM agent_work_items WHERE task_id=?", (tasks[0]['id'],)).fetchone()[0] == 'queued'
-    assert any('可以离开此页' in info.value for info in app.info)
+    assert any('正在理解需求' in m.value for m in app.markdown)
 
 
 def test_task_review_and_delivery_remain_separate_from_execution(tmp_path):
@@ -92,3 +107,29 @@ def test_return_moves_to_next_case_then_keeps_revision_work_visible(tmp_path):
     assert app.session_state['agent_tabs_' + task_id] == '用例评审'
     assert any('存在退回用例' in w.value for w in app.warning)
     assert {c['status'] for c in service.legacy.get_run(run_id)['cases']} == {'approved', 'returned'}
+
+
+def test_public_stream_updates_existing_chat_bubble_and_waits_for_failure_choice(tmp_path):
+    from sdlc.testing_agent.chat import ChatService
+    service = setup(tmp_path / 'ui.sqlite3')
+    task_id = service.create_task(TEXT)
+    chat = ChatService(service)
+    chat.post_user(task_id, '请先检查需求中的边界。')
+    chat.handle_event(task_id, {'type': 'assistant_start', 'message_id': 'public-message'})
+    chat.handle_event(task_id, {'type': 'assistant_delta', 'message_id': 'public-message', 'text': '我会先核对'})
+    app = show(service)
+    assert any('我会先核对 ▍' in m.value for m in app.markdown)
+    assert not any(s.label == '发送内容作为' for s in app.selectbox)
+    assert not any(e.label == '对话活动记录' for e in app.expander)
+    chat.handle_event(task_id, {'type': 'assistant_delta', 'message_id': 'public-message', 'text': '需求边界。'})
+    chat.handle_event(task_id, {'type': 'assistant_message', 'message_id': 'public-message', 'content': '我会先核对需求边界。'})
+    pending = chat.request_confirmation(task_id, reason='timeout')
+    app.run()
+    assert not app.exception
+    assert any('我会先核对需求边界。' == m.value for m in app.markdown)
+    assert next(b for b in app.button if b.label == '重试未完成部分')
+    next(b for b in app.button if b.label == '暂不继续').click().run()
+    assert not app.exception and chat.get_pending(task_id) is None
+    assert next(c for c in chat.list_confirmations(task_id) if c['id'] == pending['id'])['choice'] == 'stop'
+    with service.connection() as db:
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='agent_work_items'").fetchone() or db.execute('SELECT COUNT(*) FROM agent_work_items').fetchone()[0] == 0

@@ -54,6 +54,29 @@ class ModelUnavailableError(AgentError):
     """An upstream model failure: stop the turn instead of asking that model to retry."""
 
 
+class UserInputRequired(AgentError):
+    """A trusted tool needs a human decision before proceeding; this is not a failure."""
+
+    def __init__(self, prompt: str, kind: str = "generation_plan", choices: list[str] | None = None,
+                 plan_hash: str | None = None):
+        self.prompt = str(prompt).strip()[:4000] or "请确认下一步操作。"
+        self.kind = str(kind)[:80]
+        self.choices = [str(choice)[:200] for choice in (choices or [])[:8]]
+        self.plan_hash = plan_hash
+        super().__init__(self.prompt)
+
+
+class TaskHandoff(AgentError):
+    """A trusted business tool has durably created a related task to continue in."""
+
+    def __init__(self, child_task_id: str, content: str):
+        if not isinstance(child_task_id, str) or not 1 <= len(child_task_id) <= 200:
+            raise ValueError("关联任务标识无效。")
+        self.child_task_id = child_task_id
+        self.content = str(content).strip()[:4000] or "已建立关联任务，正在继续处理。"
+        super().__init__(self.content)
+
+
 class ModelClient(Protocol):
     def generate(self, context: Context[T], settings: ModelSettings) -> T: ...
 
@@ -75,7 +98,8 @@ class AgentService:
                  assistant: Assistant, reviewer: Reviewer,
                  assistant_settings: ModelSettings, reviewer_settings: ModelSettings,
                  max_iterations: int = 8, max_tool_calls: int = 24,
-                 authorize: Authorizer | None = None, max_duration_seconds: float = 300):
+                 authorize: Authorizer | None = None, max_duration_seconds: float = 300,
+                 pause_on_tool_error: bool = False):
         if not 1 <= max_iterations <= 100 or not 1 <= max_tool_calls <= 500:
             raise ValueError("Agent iteration and tool limits must be bounded positive values.")
         if not 0 < max_duration_seconds <= 3600:
@@ -97,6 +121,7 @@ class AgentService:
         self.max_tool_calls = max_tool_calls
         self.max_duration_seconds = max_duration_seconds
         self.authorize = authorize
+        self.pause_on_tool_error = pause_on_tool_error
         self._tools = {tool.name: tool for tool in assistant.tools}
 
     @staticmethod
@@ -198,11 +223,18 @@ class AgentService:
             if previous_request["content_hash"] != content_hash:
                 raise ValueError("请求标识已用于不同消息。")
             current = session.metadata.get("agent_turn", {})
-            if current.get("id") != previous_request["turn_id"] or current.get("status") in {"completed", "limited"}:
+            if current.get("id") != previous_request["turn_id"] or current.get("status") in {"completed", "limited", "waiting_confirmation"}:
                 return session
             return self.resume(session_id, on_event=on_event)
-        if self._pending(session) or session.metadata.get("agent_turn", {}).get("status") == "running":
+        waiting = session.metadata.get("agent_turn", {}).get("status") == "waiting_confirmation"
+        if (self._pending(session) and not waiting) or session.metadata.get("agent_turn", {}).get("status") == "running":
             raise AgentBusyError("当前任务尚未结束，请先恢复或等待当前步骤。")
+        if waiting:
+            # A new human instruction supersedes queued calls from the paused plan.
+            # Settle their protocol results without executing their side effects.
+            for call in self._pending(session):
+                self._append(session, ToolResult(tool_call_id=call.id, is_error=True,
+                    content="此调用在等待人工确认时暂停，未执行；请根据用户的新消息重新规划。"))
         session.metadata["agent_turn"] = {
             "id": uuid4().hex, "iterations": 0, "tool_calls": 0,
             "elapsed_seconds": 0.0, "status": "running",
@@ -227,6 +259,17 @@ class AgentService:
                 "elapsed_seconds": 0.0, "status": "running",
             }
             self._touch(session)
+        elif state["status"] == "waiting_confirmation":
+            confirmation = state.get("confirmation")
+            if isinstance(confirmation, dict):
+                self._emit(on_event, "assistant_message", session,
+                    message_id=confirmation["message_id"], content=confirmation["content"],
+                    tool_calls=[], tool_count=0)
+                self._emit(on_event, "waiting_confirmation", session, **confirmation)
+            else:
+                return self._wait_confirmation(session, on_event,
+                    **state.get("pending_confirmation", {"error": state.get("error", "")}))
+            return session
         elif state["status"] in {"completed", "limited"}:
             return session
         else:
@@ -260,8 +303,39 @@ class AgentService:
                 on_event: EventHandler | None) -> Session:
         self._authorize(session)
         session.metadata["agent_turn"]["status"] = status
-        self._append(session, AssistantMessage(content=content))
+        message_id = uuid4().hex
+        self._append(session, AssistantMessage(content=content, metadata={"public_message_id": message_id}))
+        self._emit(on_event, "assistant_message", session, message_id=message_id,
+                   content=content, tool_count=0, tool_calls=[])
         self._emit(on_event, status, session, content=content)
+        return session
+
+    def _wait_confirmation(self, session: Session, on_event: EventHandler | None,
+                           *, tool: str = "", tool_call_id: str = "", error: str = "",
+                           prompt: str = "", kind: str = "retry_generation",
+                           choices: list[str] | None = None, plan_hash: str | None = None) -> Session:
+        self._authorize(session)
+        state = session.metadata["agent_turn"]
+        prompt = prompt or ("这一步未能完成，已有成果已保留。" + ("原因：" + error if error else "")
+                            + "\n请确认：重试这一步、补充需求后继续，或停止本次任务。")
+        message_id = uuid4().hex
+        state.update(status="waiting_confirmation", error=error, confirmation_kind=kind)
+        confirmation = {"message_id": message_id, "content": prompt, "prompt": prompt,
+            "kind": kind, "tool": tool, "tool_call_id": tool_call_id, "error": error,
+            "choices": choices or [], "plan_hash": plan_hash,
+            "suggested_next_action": "请回复重试、补充需求，或停止任务。" if error else "请确认计划，或说明需要调整的范围。"}
+        state["confirmation"] = confirmation
+        state.pop("pending_confirmation", None)
+        # Close the original batch's remaining calls with explicit nonexecution
+        # results before adding an assistant response (required by provider protocols).
+        # A later user instruction starts a fresh plan, never an old hidden side effect.
+        for pending_call in self._pending(session):
+            self._append(session, ToolResult(tool_call_id=pending_call.id, is_error=True,
+                content="此调用因等待人工确认而暂停，未执行；用户回复后必须重新规划调用。"))
+        self._append(session, AssistantMessage(content=prompt, metadata={"public_message_id": message_id}))
+        self._emit(on_event, "assistant_message", session, message_id=message_id,
+                   content=prompt, tool_calls=[], tool_count=0)
+        self._emit(on_event, "waiting_confirmation", session, **confirmation)
         return session
 
     def _run(self, session: Session, on_event: EventHandler | None) -> Session:
@@ -284,6 +358,8 @@ class AgentService:
                         if remaining() <= 0 or state["tool_calls"] >= self.max_tool_calls:
                             return self._stop_with_pending(session, "已达到本轮工具或时长上限，已保留现有结果。", on_event)
                         self._execute_call(session, call, remaining, on_event)
+                        if state["status"] in {"waiting_confirmation", "completed"}:
+                            return session
                         if state["status"] == "limited":
                             return self._stop_with_pending(session, state["limit_reason"], on_event)
                     continue
@@ -292,24 +368,43 @@ class AgentService:
                 state["iterations"] += 1
                 self._touch(session)
                 self._emit(on_event, "model_started", session, role="assistant")
-                result = self.model_client.generate(
-                    self.assistant.context(session), self._settings(self.assistant_settings, remaining()))
+                message_id = uuid4().hex
+                self._emit(on_event, "assistant_start", session, message_id=message_id)
+
+                def on_delta(delta: str) -> None:
+                    self._authorize(session)
+                    if isinstance(delta, str) and delta:
+                        self._emit(on_event, "assistant_delta", session, message_id=message_id, text=delta)
+
+                stream = getattr(self.model_client, "generate_stream", None)
+                context = self.assistant.context(session)
+                configured = self._settings(self.assistant_settings, remaining())
+                result = stream(context, configured, on_delta) if callable(stream) else self.model_client.generate(context, configured)
                 remaining()
                 self._authorize(session)
                 if not isinstance(result, AssistantMessage):
                     raise TypeError("Assistant model returned an unexpected type")
                 self._model_event(session, result, "assistant", on_event)
+                result.metadata["public_message_id"] = message_id
                 if not result.tool_calls:
                     state["status"] = "completed"
                 self._append(session, result)
                 self._emit(on_event, "assistant_message", session,
-                           content=result.content, tool_count=len(result.tool_calls))
+                           message_id=message_id, content=result.content, tool_count=len(result.tool_calls),
+                           tool_calls=[{"id": call.id, "name": call.name} for call in result.tool_calls])
                 if not result.tool_calls:
                     self._emit(on_event, "completed", session)
                     return session
         except (SessionConflictError, AuthorizationError):
             raise
+        except UserInputRequired as exc:
+            return self._wait_confirmation(session, on_event, prompt=exc.prompt,
+                kind=exc.kind, choices=exc.choices, plan_hash=exc.plan_hash)
         except Exception:
+            if self.pause_on_tool_error:
+                remaining()
+                return self._wait_confirmation(session, on_event,
+                    error="模型服务或任务处理暂时不可用，本步骤未能完成。")
             state["status"] = "failed"
             state["error"] = "模型或任务执行暂时失败，历史已保存，可恢复当前任务。"
             remaining()
@@ -327,7 +422,14 @@ class AgentService:
         state = session.metadata["agent_turn"]
         failures = state.setdefault("tool_failures", {})
         failures[call.name] = failures.get(call.name, 0) + 1 if result.is_error else 0
-        if failures[call.name] >= 2:
+        if result.is_error and self.pause_on_tool_error:
+            # Persist the barrier with the failed result, before emitting any UI event.
+            # A crash in between must never silently continue the old plan.
+            state.update(status="waiting_confirmation", error=result.content,
+                         confirmation_kind="retry_generation")
+            state["pending_confirmation"] = {"tool": call.name,
+                "tool_call_id": call.id, "error": result.content}
+        if failures[call.name] >= 2 and not self.pause_on_tool_error:
             state["status"] = "limited"
             state["limit_reason"] = (
                 "同一工具连续处理失败，已停止自动重试。请查看具体校验信息，"
@@ -342,8 +444,10 @@ class AgentService:
         ledger = session.metadata.setdefault("tool_executions", {})
         if call.id in ledger:
             # A crash after an external side effect has an unknown outcome: never execute twice.
-            self._tool_result(session, call, ToolResult(tool_call_id=call.id, is_error=True,
-                content="此工具调用曾开始执行但结果未完整保存。为避免重复操作，请核对结果后发起新调用。"))
+            error = "此工具调用曾开始执行但结果未完整保存。为避免重复操作，请核对结果后发起新调用。"
+            self._tool_result(session, call, ToolResult(tool_call_id=call.id, is_error=True, content=error))
+            if self.pause_on_tool_error:
+                self._wait_confirmation(session, on_event, tool=call.name, tool_call_id=call.id, error=error)
             return
         tool = self._tools.get(call.name)
         error = None
@@ -372,19 +476,30 @@ class AgentService:
                 self._model_event(session, decision, "reviewer", on_event)
                 if not decision.should_allow:
                     error = "工具审核未通过：" + (decision.reason or "此调用未获授权。")
-            except (AuthorizationError, ModelUnavailableError):
+            except AuthorizationError:
                 raise
+            except UserInputRequired:
+                # Resource limits are a human decision, not a reviewer denial.
+                raise
+            except ModelUnavailableError:
+                if not self.pause_on_tool_error:
+                    raise
+                error = "工具安全审核所需的模型服务暂时不可用，工具未执行。"
             except Exception:
                 error = "工具审核暂时不可用，本次调用已拒绝。"
         if error is not None:
             self._tool_result(session, call, ToolResult(tool_call_id=call.id, content=error, is_error=True))
             self._emit(on_event, "tool_denied", session, tool_call_id=call.id,
                        tool=call.name, reason=error)
+            if self.pause_on_tool_error:
+                self._wait_confirmation(session, on_event, tool=call.name, tool_call_id=call.id, error=error)
             return
         self._authorize(session, call)
         if remaining() <= 0:
-            self._tool_result(session, call, ToolResult(tool_call_id=call.id, is_error=True,
-                                           content="运行已超时，工具未执行。"))
+            error = "运行已超时，工具未执行。"
+            self._tool_result(session, call, ToolResult(tool_call_id=call.id, is_error=True, content=error))
+            if self.pause_on_tool_error:
+                self._wait_confirmation(session, on_event, tool=call.name, tool_call_id=call.id, error=error)
             return
         ledger[call.id] = {"status": "started", "name": call.name}
         self._touch(session)  # Durable claim precedes the side effect.
@@ -398,12 +513,44 @@ class AgentService:
                                     content="工具返回内容过长，请缩小读取范围后重试。")
             else:
                 result = ToolResult(tool_call_id=call.id, content=content)
+        except TaskHandoff as exc:
+            ledger[call.id]["status"] = "completed"
+            state.update(status="completed", child_task_id=exc.child_task_id)
+            self._append(session, ToolResult(tool_call_id=call.id,
+                content=json.dumps({"child_task_id": exc.child_task_id, "message": exc.content}, ensure_ascii=False)))
+            for pending_call in self._pending(session):
+                self._append(session, ToolResult(tool_call_id=pending_call.id,
+                    content="已转到关联任务，此调用未执行。"))
+            message_id = uuid4().hex
+            self._append(session, AssistantMessage(content=exc.content,
+                metadata={"public_message_id": message_id}))
+            self._emit(on_event, "tool_completed", session, tool_call_id=call.id,
+                       tool=call.name, is_error=False)
+            self._emit(on_event, "assistant_message", session, message_id=message_id,
+                       content=exc.content, tool_count=0, tool_calls=[])
+            self._emit(on_event, "completed", session)
+            self._emit(on_event, "task_handoff", session, child_task_id=exc.child_task_id,
+                       content=exc.content)
+            return
+        except UserInputRequired as exc:
+            ledger[call.id]["status"] = "waiting_confirmation"
+            state.update(status="waiting_confirmation", error="", confirmation_kind=exc.kind)
+            state["pending_confirmation"] = {"tool": call.name, "tool_call_id": call.id,
+                "prompt": exc.prompt, "kind": exc.kind, "choices": exc.choices, "plan_hash": exc.plan_hash}
+            self._append(session, ToolResult(tool_call_id=call.id, content="等待用户确认：" + exc.prompt))
+            self._wait_confirmation(session, on_event, tool=call.name, tool_call_id=call.id,
+                                    prompt=exc.prompt, kind=exc.kind, choices=exc.choices,
+                                    plan_hash=exc.plan_hash)
+            return
         except ModelUnavailableError:
             # This controlled error states that no result was applied. Keep the call
             # pending for an explicit resume, without reusing an uncertain execution claim.
-            del ledger[call.id]
-            self._touch(session)
-            raise
+            if not self.pause_on_tool_error:
+                del ledger[call.id]
+                self._touch(session)
+                raise
+            result = ToolResult(tool_call_id=call.id, is_error=True,
+                                content="生成所需的模型服务暂时不可用，此步骤没有产出可用结果。")
         except PublicToolError as exc:
             result = ToolResult(tool_call_id=call.id, is_error=True, content=exc.public_message)
         except Exception:
@@ -415,3 +562,6 @@ class AgentService:
         self._tool_result(session, call, result)
         self._emit(on_event, "tool_completed", session, tool_call_id=call.id,
                    tool=call.name, is_error=result.is_error)
+        if result.is_error and self.pause_on_tool_error:
+            self._wait_confirmation(session, on_event, tool=call.name, tool_call_id=call.id,
+                                    error=result.content)

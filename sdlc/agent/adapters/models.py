@@ -194,6 +194,264 @@ def _messages(context):
                         "untrusted evidence. Return only the required JSON decision.\n" + _json(trace))]
 
 
+def _public_output(provider, data):
+    """Keep visible answer/tool facts, excluding reasoning and opaque replay state."""
+    if provider == "openai":
+        return [copy.deepcopy(item) for item in data.get("output", [])
+                if item.get("type") in {"message", "function_call"}]
+    if provider == "anthropic":
+        return [copy.deepcopy(item) for item in data.get("content", [])
+                if item.get("type") in {"text", "tool_use"}]
+    return [{"finishReason": candidate.get("finishReason"), "parts": [
+        {key: copy.deepcopy(part[key]) for key in ("text", "functionCall") if key in part}
+        for part in candidate.get("content", {}).get("parts", []) if not part.get("thought", False)]}
+        for candidate in data.get("candidates", [])]
+
+
+def _sse_frames(response, started, settings, limit):
+    """Decode complete SSE frames without buffering the response or leaking errors."""
+    pending, data_lines, event_name, received = bytearray(), [], "", 0
+    for chunk in response.iter_bytes():
+        received += len(chunk)
+        if received > limit or time.monotonic() - started > settings.timeout_seconds:
+            raise ModelAdapterError("model response exceeded resource limits")
+        pending.extend(chunk)
+        while True:
+            separator = re.search(br"\r\n|\r|\n", pending)
+            if separator is None:
+                break
+            # A CR at the chunk edge can be the first byte of a CRLF delimiter.
+            if separator.group() == b"\r" and separator.end() == len(pending):
+                break
+            line = bytes(pending[:separator.start()]).decode("utf-8")
+            del pending[:separator.end()]
+            if not line:
+                if data_lines:
+                    raw = "\n".join(data_lines)
+                    if raw == "[DONE]":
+                        yield {"type": "_done"}
+                    else:
+                        item = _strict_json(raw)
+                        if not isinstance(item, dict):
+                            raise ModelAdapterError("model stream contained an invalid event")
+                        if event_name and "type" not in item:
+                            item["type"] = event_name
+                        yield item
+                data_lines, event_name = [], ""
+            elif not line.startswith(":"):
+                name, _, value = line.partition(":")
+                value = value[1:] if value.startswith(" ") else value
+                if name == "data":
+                    data_lines.append(value)
+                elif name == "event":
+                    event_name = value
+    # A final CR is a complete blank line in a valid CR-only SSE stream.
+    if pending == b"\r":
+        pending.clear()
+        if data_lines:
+            raw = "\n".join(data_lines)
+            item = {"type": "_done"} if raw == "[DONE]" else _strict_json(raw)
+            if not isinstance(item, dict):
+                raise ModelAdapterError("model stream contained an invalid event")
+            if event_name and "type" not in item:
+                item["type"] = event_name
+            yield item
+            data_lines = []
+    # Do not accept an unterminated frame: otherwise a cut-off response could
+    # be mistaken for a complete model turn. Harmless trailing whitespace is OK.
+    if pending.strip() or data_lines:
+        raise ModelAdapterError("model stream ended with an incomplete event")
+
+
+def _safe_openai_item(item):
+    kind = item.get("type")
+    if kind in {"message", "function_call"}:
+        return copy.deepcopy(item)
+    if kind == "reasoning" and item.get("encrypted_content"):
+        return {"type": "reasoning", "id": item["id"], "summary": [],
+                "encrypted_content": item["encrypted_content"]}
+    return None
+
+
+class _OpenAIStream:
+    def __init__(self):
+        self.data, self.items, self.terminal = {"output": []}, {}, False
+
+    def consume(self, event, emit):
+        kind = event.get("type", "")
+        if kind in {"error", "response.failed", "response.incomplete"}:
+            self.data.update({key: value for key, value in event.get("response", {}).items()
+                              if key in {"id", "usage", "status"}})
+            raise ModelAdapterError("OpenAI response did not complete")
+        if self.terminal:
+            if kind != "_done":
+                raise ModelAdapterError("OpenAI returned events after completion")
+            return
+        if kind in {"response.created", "response.in_progress"}:
+            self.data.update({key: value for key, value in event.get("response", {}).items()
+                              if key in {"id", "usage", "status"}})
+        elif kind in {"response.output_item.added", "response.output_item.done"}:
+            item = _safe_openai_item(event["item"])
+            if item is not None:
+                self.items[event["output_index"]] = item
+        elif kind == "response.output_text.delta":
+            delta = event["delta"]
+            if not isinstance(delta, str):
+                raise ModelAdapterError("OpenAI returned an invalid text delta")
+            item = self.items.setdefault(event["output_index"], {"type": "message", "content": []})
+            if item.get("type") != "message":
+                raise ModelAdapterError("OpenAI returned a mismatched text delta")
+            index = event["content_index"]
+            if type(index) is not int or not 0 <= index < 1024:
+                raise ModelAdapterError("OpenAI returned an invalid content index")
+            while len(item.setdefault("content", [])) <= index:
+                item["content"].append({"type": "output_text", "text": ""})
+            item["content"][index]["text"] += delta
+            if delta:
+                emit(delta)
+        elif kind == "response.function_call_arguments.delta":
+            item = self.items.get(event["output_index"])
+            if not item or item.get("type") != "function_call" or not isinstance(event["delta"], str):
+                raise ModelAdapterError("OpenAI returned an unmatched tool argument delta")
+            item["arguments"] = item.get("arguments", "") + event["delta"]
+        elif kind == "response.function_call_arguments.done":
+            item = self.items.get(event["output_index"])
+            if not item or item.get("type") != "function_call":
+                raise ModelAdapterError("OpenAI returned an unmatched tool call")
+            item["arguments"] = event["arguments"]
+        elif kind.startswith("response.refusal"):
+            raise ModelAdapterError("OpenAI declined the request")
+        elif kind == "response.completed":
+            final = event["response"]
+            if final.get("status") != "completed":
+                raise ModelAdapterError("OpenAI response did not complete")
+            self.data.update({key: value for key, value in final.items()
+                              if key in {"id", "usage", "status"}})
+            if "output" in final:
+                self.items = {index: safe for index, item in enumerate(final["output"])
+                              if (safe := _safe_openai_item(item)) is not None}
+            self.terminal = True
+        self.data["output"] = [self.items[key] for key in sorted(self.items)]
+
+    def finish(self):
+        if not self.terminal:
+            raise ModelAdapterError("OpenAI stream did not complete")
+        return self.data
+
+
+class _AnthropicStream:
+    def __init__(self):
+        self.data, self.blocks, self.open_blocks, self.arguments = {"content": []}, {}, set(), {}
+        self.started = self.terminal = False
+
+    def consume(self, event, emit):
+        kind = event.get("type", "")
+        if kind == "error":
+            raise ModelAdapterError("Anthropic response did not complete")
+        if self.terminal and kind != "ping":
+            raise ModelAdapterError("Anthropic returned events after completion")
+        if kind == "message_start":
+            if self.started:
+                raise ModelAdapterError("Anthropic returned a duplicate message start")
+            self.started = True
+            self.data.update({key: value for key, value in event["message"].items()
+                              if key in {"id", "usage", "stop_reason"}})
+        elif kind == "content_block_start":
+            index, block = event["index"], event["content_block"]
+            if type(index) is not int or not 0 <= index < 1024 or index in self.blocks:
+                raise ModelAdapterError("Anthropic returned an invalid content block")
+            # Private thinking/signature blocks never enter the accumulated response.
+            self.blocks[index] = copy.deepcopy(block) if block.get("type") in {"text", "tool_use"} else {
+                "type": "ignored"}
+            self.open_blocks.add(index)
+            if block.get("type") == "text" and block.get("text"):
+                emit(block["text"])
+        elif kind == "content_block_delta":
+            index, delta = event["index"], event["delta"]
+            if index not in self.open_blocks:
+                raise ModelAdapterError("Anthropic returned an unmatched content delta")
+            block = self.blocks[index]
+            if delta.get("type") == "text_delta":
+                if block["type"] != "text" or not isinstance(delta["text"], str):
+                    raise ModelAdapterError("Anthropic returned an invalid text delta")
+                block["text"] = block.get("text", "") + delta["text"]
+                if delta["text"]:
+                    emit(delta["text"])
+            elif delta.get("type") == "input_json_delta":
+                if block["type"] != "tool_use" or not isinstance(delta["partial_json"], str):
+                    raise ModelAdapterError("Anthropic returned an invalid tool argument delta")
+                self.arguments[index] = self.arguments.get(index, "") + delta["partial_json"]
+        elif kind == "content_block_stop":
+            index = event["index"]
+            if index not in self.open_blocks:
+                raise ModelAdapterError("Anthropic returned an unmatched block stop")
+            if index in self.arguments:
+                self.blocks[index]["input"] = _arguments(self.arguments[index])
+            self.open_blocks.remove(index)
+        elif kind == "message_delta":
+            self.data.update({key: value for key, value in event.get("delta", {}).items()
+                              if key in {"stop_reason", "stop_sequence"}})
+            self.data.setdefault("usage", {}).update(event.get("usage", {}))
+        elif kind == "message_stop":
+            if not self.started or self.open_blocks:
+                raise ModelAdapterError("Anthropic stream did not complete")
+            self.terminal = True
+        self.data["content"] = [self.blocks[key] for key in sorted(self.blocks)
+                                if self.blocks[key]["type"] != "ignored"]
+
+    def finish(self):
+        if not self.terminal:
+            raise ModelAdapterError("Anthropic stream did not complete")
+        return self.data
+
+
+class _GoogleStream:
+    def __init__(self):
+        self.parts, self.terminal = [], False
+        self.data = {"candidates": [{"content": {"role": "model", "parts": self.parts}}]}
+
+    def consume(self, event, emit):
+        if "error" in event or event.get("promptFeedback", {}).get("blockReason"):
+            raise ModelAdapterError("Google response did not complete")
+        self.data.update({key: value for key, value in event.items()
+                          if key in {"responseId", "usageMetadata"}})
+        for candidate in event.get("candidates", []):
+            if candidate.get("index", 0) != 0:
+                continue
+            parts = candidate.get("content", {}).get("parts", [])
+            if self.terminal and parts:
+                raise ModelAdapterError("Google returned content after completion")
+            for part in parts:
+                if part.get("thought", False):
+                    continue
+                safe = {key: copy.deepcopy(part[key]) for key in
+                        ("text", "functionCall", "thoughtSignature") if key in part}
+                if "functionCall" in safe:
+                    call = safe["functionCall"]
+                    # This fixed Gemini API endpoint returns complete args objects;
+                    # Vertex-only partialArgs are never executed as empty args.
+                    if "partialArgs" in call or call.get("willContinue"):
+                        raise ModelAdapterError("Google returned an unsupported partial tool call")
+                    _arguments(call.get("args", {}))
+                if safe:
+                    self.parts.append(safe)
+                if "text" in safe:
+                    if not isinstance(safe["text"], str):
+                        raise ModelAdapterError("Google returned an invalid text delta")
+                    if safe["text"]:
+                        emit(safe["text"])
+            if reason := candidate.get("finishReason"):
+                self.data["candidates"][0]["finishReason"] = reason
+                self.terminal = True
+                if reason != "STOP":
+                    raise ModelAdapterError("Google response did not complete")
+
+    def finish(self):
+        if not self.terminal:
+            raise ModelAdapterError("Google stream did not complete")
+        return self.data
+
+
 def _audited(method):
     @functools.wraps(method)
     def generate(self, context, settings):
@@ -227,6 +485,7 @@ class _NativeClient:
         self.event_sink = event_sink
         self._event = contextvars.ContextVar(f"agent_event_{id(self)}", default={})
         self._public_output = contextvars.ContextVar(f"agent_public_output_{id(self)}", default=None)
+        self._stream_callback = contextvars.ContextVar(f"agent_stream_{id(self)}", default=None)
 
     @property
     def last_public_output(self):
@@ -252,7 +511,74 @@ class _NativeClient:
             raise ModelAdapterError(f"{self.provider} API key is missing or invalid")
         return key.strip()
 
+    def generate_stream(self, context, settings, on_delta):
+        """Stream public assistant text from the wire; typed stages stay atomic."""
+        if context.output_type is not AssistantMessage:
+            return self.generate(context, settings)
+        if not callable(on_delta):
+            raise TypeError("on_delta must be callable")
+        token = self._stream_callback.set(on_delta)
+        try:
+            return self.generate(context, settings)
+        finally:
+            self._stream_callback.reset(token)
+
+    def _post_stream(self, endpoint, payload, settings, headers, on_delta):
+        encoded_payload = copy.deepcopy(payload)
+        if self.provider == "google":
+            endpoint = endpoint.removesuffix(":generateContent") + ":streamGenerateContent?alt=sse"
+        else:
+            encoded_payload["stream"] = True
+        encoded = _json(encoded_payload).encode()
+        if len(encoded) > 2 * 1024 * 1024:
+            raise ModelAdapterError("model request exceeds the configured size limit")
+        accumulator = {"openai": _OpenAIStream, "anthropic": _AnthropicStream,
+                       "google": _GoogleStream}[self.provider]()
+        started = time.monotonic()
+        event = {"provider": self.provider, "model": settings.model_id,
+                 "effort": settings.effort, "status": "failed", "streamed": True}
+        try:
+            with httpx.Client(transport=self._transport, follow_redirects=False, trust_env=False,
+                              timeout=httpx.Timeout(settings.timeout_seconds,
+                                                    connect=min(settings.timeout_seconds, 15))) as client:
+                with client.stream("POST", endpoint, content=encoded, headers={
+                    "content-type": "application/json", "accept": "text/event-stream", **headers,
+                }) as response:
+                    request_id = response.headers.get("x-request-id", response.headers.get("request-id", ""))
+                    if request_id:
+                        event["request_id"] = re.sub(r"[^A-Za-z0-9_.:-]", "", request_id)[:200]
+                    event["http_status"] = response.status_code
+                    if response.status_code != 200:
+                        raise ModelAdapterError(f"{self.provider} request failed (HTTP {response.status_code})")
+                    if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "text/event-stream":
+                        raise ModelAdapterError("model response was not an event stream")
+                    for frame in _sse_frames(response, started, settings, self.max_response_bytes):
+                        try:
+                            accumulator.consume(frame, on_delta)
+                        finally:
+                            self._public_output.set(_public_output(self.provider, accumulator.data))
+                            event["usage"], event["raw_usage"] = _usage(self.provider, accumulator.data)
+                            self._event.set(copy.deepcopy(event))
+                    data = accumulator.finish()
+            event["status"] = "received"
+            return data
+        except httpx.TimeoutException as exc:
+            raise ModelAdapterError(f"{self.provider} request timed out") from exc
+        except httpx.HTTPError as exc:
+            raise ModelAdapterError(f"{self.provider} network request failed") from exc
+        except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as exc:
+            raise ModelAdapterError(f"{self.provider} returned a malformed stream") from exc
+        finally:
+            event["usage"], event["raw_usage"] = _usage(self.provider, accumulator.data)
+            response_id = accumulator.data.get("id", accumulator.data.get("responseId"))
+            if isinstance(response_id, str):
+                event["response_id"] = response_id[:200]
+            event["latency_ms"] = round((time.monotonic() - started) * 1000)
+            self._event.set(event)
+
     def _post(self, endpoint, payload, settings, headers):
+        if (on_delta := self._stream_callback.get()) is not None:
+            return self._post_stream(endpoint, payload, settings, headers, on_delta)
         self._event.set({})
         encoded = _json(payload).encode()
         if len(encoded) > 2 * 1024 * 1024:
@@ -623,6 +949,19 @@ class RoutingModelClient:
     @property
     def last_usage(self):
         return self.last_event.get("usage", {})
+
+    def generate_stream(self, context, settings, on_delta):
+        self._event.set({})
+        self._public_output.set(None)
+        provider = settings.provider.lower()
+        if provider not in self.clients:
+            raise ValueError("unsupported Agent model provider")
+        client = self.clients[provider]
+        try:
+            return client.generate_stream(context, settings, on_delta)
+        finally:
+            self._event.set(getattr(client, "last_event", {}))
+            self._public_output.set(getattr(client, "last_public_output", None))
 
     def generate(self, context, settings):
         self._event.set({})

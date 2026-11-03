@@ -102,7 +102,7 @@ def new_task_form(service, tasks):
             return task_id
         task_id = notice_action(create)
         if task_id:
-            st.session_state['agent_task_' + service.project_id] = task_id
+            st.session_state['_chat_next_task_' + service.project_id] = task_id
             st.session_state['_agent_create'] = False
             st.rerun()
 
@@ -158,10 +158,10 @@ def requirements_view(service, task):
                 if question['status'] == 'answered' and question.get('answer', {}).get('disposition') == 'answer' and 'manage' in service.legacy.user['permissions']:
                     reason = st.text_input('需求确认说明', key='confirm_reason_' + task['id'] + qid)
                     if st.button('确认补充并继续相关测试', key='confirm_' + task['id'] + qid):
-                        child = notice_action(lambda: service.confirm_answer(task['id'], qid, reason, question['revision']))
-                        if child:
-                            worker.enqueue(service, child)
-                            st.session_state['agent_task_' + service.project_id] = child
+                        result = notice_action(lambda: service.confirm_answers_and_continue(task['id'],
+                            {qid: question['revision']}, reason))
+                        if result:
+                            st.session_state['_chat_next_task_' + service.project_id] = result['task_id']
                             st.rerun()
                 if question['status'] == 'answered' and question.get('answer', {}).get('disposition') == 'false_positive':
                     sources = st.multiselect('支持误报判断的原文段落', q['paragraph_ids'], key='false_positive_sources_' + task['id'] + qid)
@@ -194,7 +194,7 @@ def coverage_view(service, task):
             if st.button('确认范围调整', key='exclude_scope_' + task['id']):
                 child = notice_action(lambda: service.exclude_condition(task['id'], ids, reason, excluded_rules))
                 if child:
-                    st.session_state['agent_task_' + service.project_id] = child
+                    st.session_state['_chat_next_task_' + service.project_id] = child
                     st.rerun()
     suggestions = service.reuse_suggestions(task['id'])
     with st.expander('项目已有用例与复用建议'):
@@ -339,7 +339,7 @@ def cases_view(service, task):
                     if st.button('确认处理建议', key='resolve_' + proposal['id']):
                         child = notice_action(lambda: service.resolve_proposal(task['id'], proposal['id'], decision, why, target))
                         if child:
-                            st.session_state['agent_task_' + service.project_id] = child
+                            st.session_state['_chat_next_task_' + service.project_id] = child
                             st.rerun()
     if 'edit' in permissions and task['status'] not in {'completed', 'cancelled'}:
         with st.expander('人工修订当前用例'):
@@ -430,7 +430,7 @@ def resources_view(service):
                         st.rerun()
 
 
-def workspace(legacy):
+def legacy_workspace(legacy):
     service = testing_service(legacy)
     page_header('项目测试任务', '让 Agent 围绕测试目标整理依据、发现缺口并推进到可评审的成果。', 'workspace', '测试 Agent')
     resources_view(service)
@@ -458,6 +458,9 @@ def workspace(legacy):
         st.caption('任务开始后，可在这里继续需求澄清、用例评审和版本维护。')
         return
     key = 'agent_task_' + service.project_id
+    next_task = st.session_state.pop('_chat_next_task_' + service.project_id, None)
+    if next_task:
+        st.session_state[key] = next_task
     ids = [t['id'] for t in tasks]
     # A just-created child may not be in the current page.
     selected = st.session_state.get(key)
@@ -468,7 +471,7 @@ def workspace(legacy):
         except ValueError:
             st.session_state.pop(key, None)
     selected = st.selectbox('当前测试任务', ids, key=key,
-        format_func=lambda tid: next(t['goal'][:50] + f" · v{t['document_version']} · " + STATES.get(t['status'], t['status']) for t in tasks if t['id'] == tid))
+        format_func=lambda tid: next(t['goal'][:50] + f" · v{t['document_version']} · {t['id'][:8]}" for t in tasks if t['id'] == tid))
     previous, counter, following = st.columns([1, 2, 1])
     if previous.button('上一页任务', disabled=page == 1):
         st.session_state['agent_task_page_' + service.project_id] = page - 1
@@ -525,3 +528,8 @@ def workspace(legacy):
             st.caption(event['created_at'] + ' · ' + event['action'])
             if 'manage' in permissions:
                 st.json(event['details'], expanded=False)
+
+
+def workspace(legacy):
+    from sdlc.testing_agent.chat_ui import workspace as chat_workspace
+    return chat_workspace(legacy)

@@ -152,6 +152,9 @@ class Service(Engine):
             publication = db.execute('SELECT complete,task_id FROM testing_agent_publications WHERE run_id=?', (run_id,)).fetchone()
             if publication and not publication['complete']:
                 issues.append('测试任务仍有尚未完成的生成或覆盖范围，部分成果可评审，不能导出完整批准版本。')
+            if publication and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='testing_agent_chat_confirmations'").fetchone():
+                if db.execute("SELECT 1 FROM testing_agent_chat_confirmations WHERE task_id=? AND status='pending'", (publication['task_id'],)).fetchone():
+                    issues.append('Agent 正在等待你的下一步确认，请先在对话中处理，再建立基线或导出。')
             if publication and db.execute("""SELECT 1 FROM testing_agent_questions
                 WHERE task_id=? AND status NOT IN ('confirmed','false_positive')
                 AND json_extract(content_json,'$.blocking')=1""", (publication['task_id'],)).fetchone():

@@ -73,6 +73,14 @@ class MessagePayload(Enqueue):
     content: str = Field(min_length=1, max_length=20_000)
 
 
+class ChatConfirmationPayload(Payload):
+    confirmation_id: str = Field(min_length=1, max_length=128)
+    choice: Literal['retry', 'refine', 'stop', 'discuss']
+    content: str = Field(default='', max_length=20_000)
+    expected_revision: int = Field(ge=1)
+    request_key: str = Field(min_length=1, max_length=128)
+
+
 class AnswerPayload(Payload):
     question_id: str = Field(min_length=1, max_length=128)
     answer: str = Field(default="", max_length=4000)
@@ -160,6 +168,7 @@ ACTION_SCHEMAS = {
     "approve": ApprovePayload, "export": ExportPayload,
     "resolve_question": ResolveQuestionPayload, "exclude_condition": ExcludePayload,
     "resolve_proposal": ResolveProposalPayload,
+    'chat': MessagePayload, 'chat_confirmation': ChatConfirmationPayload,
 }
 
 
@@ -307,6 +316,8 @@ def agent_routes(db_path):
             action = request.path_params.get("action")
             task_id = request.path_params.get("task_id")
             path = request.url.path.rstrip("/")
+            if task_id and path.endswith('/chat'):
+                action = 'chat'
             status = 200
             if request.method == "POST":
                 _mutation(request, token)
@@ -336,11 +347,15 @@ def agent_routes(db_path):
                     data = await _payload(request, schema)
                     service.get_task(task_id)
                     values = data.model_dump()
-                    if action in {"resume", "message"}:
+                    if action == 'chat_confirmation':
+                        from sdlc.testing_agent.chat import ChatService
+                        result = ChatService(service).respond(task_id, **values)
+                        status = 202 if result['job_id'] else 200
+                    elif action in {"resume", "message", "chat"}:
                         task = service.get_task(task_id)
                         if task["status"] in {"cancelled", "completed"}:
                             raise APIError("任务已取消或完成，请创建关联新任务。", 409)
-                        job_id = worker.enqueue(service, task_id, action,
+                        job_id = worker.enqueue(service, task_id, 'message' if action == 'chat' else action,
                             content=values.get("content", ""), request_key=values.get("request_key"))
                         result, status = {"task_id": task_id, "work_id": job_id}, 202
                     elif action == "cancel":
@@ -350,10 +365,10 @@ def agent_routes(db_path):
                     elif action == "answer":
                         result = {"answer": service.submit_answer(task_id, **values)}
                     elif action == "confirm":
-                        child = service.confirm_answer(task_id, **values)
-                        key = "confirm-" + hashlib.sha256((task_id + ":" + values["question_id"]).encode()).hexdigest()
-                        job_id = worker.enqueue(service, child, "start", request_key=key)
-                        result, status = {"task_id": child, "parent_task_id": task_id, "work_id": job_id}, 202
+                        continuation = service.confirm_answers_and_continue(task_id,
+                            {values['question_id']: values['expected_revision']}, values['reason'])
+                        result, status = {"task_id": continuation['task_id'], "parent_task_id": task_id,
+                                          "work_id": continuation['job_id']}, 202 if continuation['enqueued'] else 200
                     elif action == "review":
                         proposal_id = service.review_feedback(task_id, **values)
                         result = {"proposal_id": proposal_id}
@@ -415,6 +430,11 @@ def agent_routes(db_path):
                 except ValueError:
                     raise APIError("分页参数无效。") from None
                 result = {"tasks": [_public_task(task) for task in service.list_tasks(limit, offset)]}
+            elif task_id and action == 'chat':
+                from sdlc.testing_agent.chat import ChatService
+                chat = ChatService(service)
+                pending = chat.recover_waiting_confirmation(task_id)
+                result = {'messages': chat.list_messages(task_id), 'pending_confirmation': pending}
             elif task_id:
                 task = service.get_task(task_id)
                 result = {"task": _public_task(task), "review": _review_state(service, task),
@@ -445,6 +465,7 @@ def agent_routes(db_path):
         Route('/api/agent/resources/{resource_id}/{action}', endpoint, methods=['POST']),
         Route("/api/agent/tasks", endpoint, methods=["GET", "POST"]),
         Route("/api/agent/tasks/{task_id}", endpoint, methods=["GET"]),
+        Route('/api/agent/tasks/{task_id}/chat', endpoint, methods=['GET', 'POST']),
         Route("/api/agent/tasks/{task_id}/{action}", endpoint, methods=["POST"]),
         Route("/api/agent/sessions", endpoint, methods=["GET"]),
         Route("/api/agent/sessions/{session_id}", endpoint, methods=["GET"]),

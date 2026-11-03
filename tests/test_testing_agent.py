@@ -186,6 +186,43 @@ def test_selected_shared_resources_are_fixed_and_inherited_by_confirmed_child(ct
         service.create_task(TEXT, resource_ids=['invalid-resource'])
 
 
+def test_asking_why_a_generation_failed_does_not_retry_a_model_stage(ctx):
+    from sdlc.agent.application import UserInputRequired
+    from sdlc.testing_agent.chat import ChatService
+    service, _ = ctx
+    task = ready(service)
+    service.add_artifact(task, 'interaction_policy', {'mode': 'chat'}, 'chat-v1')
+    chat = ChatService(service)
+    pending = chat.request_confirmation(task, reason='timeout')
+    chat.respond(task, pending['id'], 'discuss', '为什么失败了？', expected_revision=1, request_key='question-about-failure')
+    class Client:
+        def generate(self, context, settings):
+            pytest.fail('a question about failure cannot authorize another generation call')
+    tools = {t.name: t for t in build_tools(service, task, Client(), ModelSettings(model_id='test-only'))}
+    with pytest.raises(UserInputRequired) as error:
+        tools['check_case_evidence'].execute({})
+    assert error.value.kind == 'retry_generation'
+
+
+def test_agent_can_reanalyze_current_source_without_overwriting_old_results(ctx):
+    from sdlc.agent.application import TaskHandoff
+    service, _ = ctx
+    task = ready(service, ambiguous=True)
+    run_id = service.finalize_design(task)
+    original = service.legacy.get_run(run_id)
+    tools = {t.name: t for t in build_tools(service, task, object(), ModelSettings(model_id='test-only'))}
+    with pytest.raises(TaskHandoff) as handoff:
+        tools['reanalyze_current_requirements'].execute({'reason': '需要重新判断当前文档的目标产品与嵌入材料。'})
+    child = service.get_task(handoff.value.child_task_id)
+    assert child['parent_task_id'] == task and child['input_hash'] == service.get_task(task)['input_hash']
+    assert child['run_id'] is None and child['questions'] == []
+    assert service.legacy.get_run(run_id)['cases'] == original['cases']
+    assert service.reanalyze_task(task, '重复调用使用同一关联任务') == child['id']
+    original_paragraph = service.get_task(task)['input']['paragraphs'][1]
+    source = json.loads(tools['read_requirement_paragraphs'].execute({'paragraph_ids': [original_paragraph['id']]}))
+    assert source['paragraphs'][0] == original_paragraph
+
+
 def test_team_editor_cannot_confirm_business_facts(ctx):
     service, accounts = ctx
     accounts.register('bob', 'Bob', 'testing-password-123')

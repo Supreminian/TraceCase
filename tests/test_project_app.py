@@ -29,7 +29,7 @@ def test_first_project_creation_and_empty_workspace(tmp_path, monkeypatch):
     project_id = app.selectbox(key='current_project').value
     assert Service(path).get_project(project_id)['name'] == '报销审批项目'
     assert app.radio(key='page').value == '测试任务'
-    assert next(b for b in app.button if b.label == '开始测试准备')
+    assert app.chat_input(key='agent_new_chat_' + project_id)
     app.radio(key='page').set_value('新建运行').run()
     assert app.radio(key='page').value == '新建运行'
 

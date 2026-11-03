@@ -226,6 +226,47 @@ class TestingService:
         self._event(db, task_id, 'created', {'parent_task_id': parent_task_id, 'document_version': version})
         return task_id
 
+    def _refine_task(self, db, task_id, content):
+        if not isinstance(content, str) or not 1 <= len(content.strip()) <= 2000:
+            raise ServiceError('请用 1–2,000 字符说明本轮测试目标或范围。')
+        parent = self._task(db, task_id)
+        self._active(parent)
+        prepared = prepare_input(text=parent['input']['normalized_text'])
+        child = self._insert_task(db, prepared, content.strip(), content.strip(), task_id,
+                                  parent['owner_id'], parent['confirmer_id'], parent['due_at'])
+        self._event(db, task_id, 'chat_scope_refined', {'child_task_id': child,
+                    'instruction': content.strip(), 'business_facts_changed': False})
+        return child
+
+    def refine_task(self, task_id, content):
+        with self.connection('generate', True) as db:
+            return self._refine_task(db, task_id, content)
+
+    def reanalyze_task(self, task_id, reason):
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 2000:
+            raise ServiceError('请说明重新分析当前需求的原因。')
+        from sdlc.testing_agent.chat import ChatService
+        from sdlc.testing_agent.worker import initialize, _enqueue_in_db
+        initialize(self.db_path)
+        ChatService(self)
+        with self.connection('generate', True) as db:
+            task = self._task(db, task_id)
+            self._active(task)
+            prior = db.execute("SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind='handoff' AND artifact_key='reanalysis-r1'", (task_id,)).fetchone()
+            if prior:
+                return json.loads(prior['content_json'])['child_task_id']
+            prepared = prepare_input(text=task['input']['normalized_text'])
+            child = self._insert_task(db, prepared, task['goal'], task['scope'], task_id,
+                task['owner_id'], task['confirmer_id'], task['due_at'])
+            _enqueue_in_db(self, db, child, 'start', '', 'reanalysis-' + task_id)
+            db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
+                (identifier(), task_id, 'handoff', 'reanalysis-r1', task['input_hash'],
+                 dumps({'child_task_id': child, 'intent': 'reanalyze', 'reason': reason.strip()}), now()))
+            db.execute("UPDATE testing_agent_tasks SET status='partial',error='',next_action=?,updated_at=?,revision=revision+1 WHERE id=?",
+                ('已转入关联需求版本重新分析；原始结果与审核历史保留。', now(), task_id))
+            self._event(db, task_id, 'agent_reanalysis_requested', {'child_task_id': child, 'reason': reason.strip()})
+            return child
+
     def list_tasks(self, limit=100, offset=0):
         if not 1 <= limit <= 500 or offset < 0:
             raise ServiceError('分页参数无效。')
@@ -322,9 +363,11 @@ class TestingService:
             return artifact_id
 
     def artifact(self, task_id, kind, key='default'):
-        task = self.get_task(task_id)
-        return next((a['content'] for a in reversed(task['artifacts']) if a['kind'] == kind
-                     and a['artifact_key'] == key and a['input_hash'] == task['input_hash']), None)
+        with self.connection() as db:
+            task = self._task(db, task_id)
+            row = db.execute('SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind=? AND artifact_key=? AND input_hash=?',
+                             (task_id, kind, key, task['input_hash'])).fetchone()
+            return json.loads(row['content_json']) if row else None
 
     def save_analysis(self, task_id, content):
         analysis = RequirementAnalysis.model_validate(content).model_dump()
@@ -668,38 +711,128 @@ class TestingService:
             raise ServiceError('请填写需求确认说明。')
         # A new document/task is created, never mutating the input of an executing task.
         with self.connection('manage', True) as db:
-            task = self._task(db, task_id)
-            self._active(task)
-            if task['confirmer_id'] and self.user['id'] != task['confirmer_id']:
-                raise ServiceError('仅本任务指定的需求确认人可以确认该答复。')
-            q = db.execute('SELECT * FROM testing_agent_questions WHERE task_id=? AND id=?', (task_id, question_id)).fetchone()
-            if q and q['status'] == 'confirmed':
-                return json.loads(q['confirmed_json'])['child_task_id']
-            if not q or q['status'] != 'answered' or (expected_revision is not None and q['revision'] != expected_revision):
-                raise ServiceError('答复已改变或尚未提交，请刷新。')
-            answer = json.loads(q['answer_json'])
-            if answer['disposition'] != 'answer':
+            return self._confirm_answers(db, task_id, {question_id: expected_revision}, reason)
+
+    def _confirm_answers(self, db, task_id, question_revisions, reason):
+        task = self._task(db, task_id)
+        self._active(task)
+        if task['confirmer_id'] and self.user['id'] != task['confirmer_id']:
+            raise ServiceError('仅本任务指定的需求确认人可以确认该答复。')
+        questions = [self._question(row) for row in db.execute(
+            'SELECT * FROM testing_agent_questions WHERE task_id=? ORDER BY id', (task_id,))]
+        lookup = {q['id']: q for q in questions}
+        selected = []
+        for question_id, revision in question_revisions.items():
+            q = lookup.get(question_id)
+            if not q or q['status'] not in {'answered', 'confirmed'}:
+                raise ServiceError('答复尚未提交，或问题已经更新；请查看当前问题后重试。')
+            if q['status'] != 'confirmed' and revision is not None and q['revision'] != revision:
+                raise ServiceError('这项答复已被更新，旧答复未被确认；请核对最新答复后重试。')
+            if not q['answer'] or q['answer']['disposition'] != 'answer':
                 raise ServiceError('未知、待确认或误报答复不能作为新业务事实确认。')
-            confirmed = {'answer': answer, 'reason': reason.strip(), 'actor_id': self.user['id'], 'created_at': now()}
-            text = task['input']['normalized_text'] + '\n\n## 已确认需求补充\n\n' + answer['text']
-            try:
-                prepared = prepare_input(text=text)
-            except ValueError as exc:
-                raise ServiceError('补充未保存：' + str(exc)) from None
-            child = self._insert_task(db, prepared, task['goal'], task['scope'], task_id,
-                                      task['owner_id'], task['confirmer_id'])
-            confirmed['child_task_id'] = child
-            db.execute("UPDATE testing_agent_questions SET status='confirmed',confirmed_json=?,revision=revision+1 WHERE task_id=? AND id=?",
-                       (dumps(confirmed), task_id, question_id))
-            self._event(db, task_id, 'requirement_confirmed', {'question_id': question_id, **confirmed})
-            for kind, content in [('confirmed_supplement', {'question_id': question_id, **confirmed}),
-                                  ('continuation', {'parent_task_id': task_id,
-                                    'affected_requirement_ids': json.loads(q['content_json'])['requirement_ids'],
-                                    'affected_case_ids': json.loads(q['content_json'])['affected_case_ids'],
-                                    'reuse_policy': '仅复用内容及依赖不变的草稿；批准沿用须人工确认。'})]:
-                db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
-                           (identifier(), child, kind, 'default', prepared['input_hash'], dumps(content), now()))
+            selected.append(q)
+        children = {q['confirmed']['child_task_id'] for q in selected if q['status'] == 'confirmed'}
+        if all(q['status'] == 'confirmed' for q in selected) and len(children) == 1:
+            return children.pop()
+        # Include facts previously confirmed on this source task, so confirming a
+        # later question never creates a sibling version that loses earlier facts.
+        supplements = [q for q in questions if q['status'] == 'confirmed' or q['id'] in question_revisions]
+        text = task['input']['normalized_text'] + '\n\n## 已确认需求补充\n\n' + '\n\n'.join(
+            '### ' + q['id'] + '：' + q['content']['question'] + '\n\n' + q['answer']['text'] for q in supplements)
+        try:
+            prepared = prepare_input(text=text)
+        except ValueError as exc:
+            raise ServiceError('补充未保存：' + str(exc)) from None
+        child = self._insert_task(db, prepared, task['goal'], task['scope'], task_id,
+                                 task['owner_id'], task['confirmer_id'], task['due_at'])
+        confirmed_answers = []
+        for q in selected:
+            confirmed = {'answer': q['answer'], 'reason': reason.strip(), 'actor_id': self.user['id'],
+                         'created_at': now(), 'child_task_id': child}
+            confirmed_answers.append({'question_id': q['id'], 'question': q['content']['question'], **confirmed})
+            if q['status'] != 'confirmed':
+                db.execute("UPDATE testing_agent_questions SET status='confirmed',confirmed_json=?,revision=revision+1 WHERE task_id=? AND id=?",
+                           (dumps(confirmed), task_id, q['id']))
+                self._event(db, task_id, 'requirement_confirmed', {'question_id': q['id'], **confirmed})
+        # Keep outstanding questions and submitted-but-unconfirmed answers visible
+        # in the new version. They are not appended to the PRD as business facts.
+        for q in questions:
+            if q['id'] in question_revisions or q['status'] == 'confirmed':
+                continue
+            db.execute('INSERT INTO testing_agent_questions(task_id,id,content_json,status,answer_json,confirmed_json,revision) VALUES(?,?,?,?,?,?,?)',
+                (child, q['id'], dumps(q['content']), q['status'], dumps(q['answer']) if q['answer'] else None,
+                 dumps(q['confirmed']) if q['confirmed'] else None, q['revision']))
+        supplement = {'answers': confirmed_answers, 'question_ids': [q['id'] for q in selected]}
+        if len(confirmed_answers) == 1:
+            supplement.update(confirmed_answers[0])
+        for kind, content in [('confirmed_supplement', supplement),
+                              ('continuation', {'parent_task_id': task_id,
+                                'affected_requirement_ids': sorted({r for q in supplements for r in q['content']['requirement_ids']}),
+                                'affected_case_ids': sorted({c for q in supplements for c in q['content']['affected_case_ids']}),
+                                'reuse_policy': '仅复用内容及依赖不变的草稿；批准沿用须人工确认。'})]:
+            db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
+                       (identifier(), child, kind, 'default', prepared['input_hash'], dumps(content), now()))
         return child
+
+    def confirm_answers_and_continue(self, task_id, question_revisions, reason):
+        """Commit confirmed facts, public handoff and one queued turn together."""
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+            raise ServiceError('请填写需求确认说明。')
+        if not isinstance(question_revisions, dict) or not question_revisions or any(
+                not isinstance(qid, str) or not qid or type(revision) is not int or revision < 1
+                for qid, revision in question_revisions.items()):
+            raise ServiceError('请选择已提交的答复，并保留其当前版本。')
+        from sdlc.testing_agent.chat import ChatService
+        from sdlc.testing_agent.worker import initialize, _enqueue_in_db
+        initialize(self.db_path)
+        chat = ChatService(self)
+        # These questions become immutable once confirmed. Key by their identities
+        # so a double click with either the old or refreshed revision reuses the
+        # same continuation; revisions are checked before the first commit.
+        key = 'requirements-' + fingerprint(sorted(question_revisions))[:40]
+        with self.connection('manage', True) as db:
+            task = self._task(db, task_id)
+            prior = db.execute("SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind='handoff' AND artifact_key=?",
+                               (task_id, key)).fetchone()
+            if prior:
+                return json.loads(prior['content_json'])
+            active = db.execute("SELECT 1 FROM agent_work_items WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone()
+            if active:
+                raise ServiceError('Agent 仍在处理当前消息；请等本轮回复后再确认需求补充。')
+            selected_rows = [db.execute('SELECT status FROM testing_agent_questions WHERE task_id=? AND id=?',
+                (task_id, qid)).fetchone() for qid in question_revisions]
+            already_confirmed = all(q and q['status'] == 'confirmed' for q in selected_rows)
+            child = self._confirm_answers(db, task_id, question_revisions, reason)
+            child_task = self._task(db, child)
+            pending = db.execute("SELECT id FROM testing_agent_chat_confirmations WHERE task_id=? AND status='pending'", (task_id,)).fetchone()
+            timestamp = now()
+            if pending:
+                db.execute("UPDATE testing_agent_chat_confirmations SET status='resolved',choice='stop',content=?,response_actor_id=?,response_key=?,followup_task_id=?,updated_at=?,revision=revision+1 WHERE id=?",
+                    ('需求补充已确认，转入关联版本继续。', self.user['id'], key, child, timestamp, pending['id']))
+                self._event(db, task_id, 'chat_confirmation_replaced', {'confirmation_id': pending['id'], 'child_task_id': child})
+            chat._post_user_db(db, task_id, '我确认已提交的需求补充，请据此继续测试设计。', key)
+            prior_job = db.execute('SELECT id FROM agent_work_items WHERE task_id=? ORDER BY created_at DESC LIMIT 1', (child,)).fetchone()
+            # A replay of a legacy fact confirmation navigates to its existing
+            # work. It must not reopen a delivered/cancelled task or retry a failed
+            # generation without the separate retry confirmation.
+            enqueue = not already_confirmed or (child_task['status'] == 'queued' and not prior_job)
+            job_id = _enqueue_in_db(self, db, child, 'start', '', 'requirements-' + child, record_chat=False) if enqueue else prior_job['id'] if prior_job else None
+            if pending:
+                db.execute('UPDATE testing_agent_chat_confirmations SET job_id=? WHERE id=?', (job_id, pending['id']))
+            supplement_row = db.execute("SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind='confirmed_supplement'", (child,)).fetchone()
+            supplement = json.loads(supplement_row['content_json']) if supplement_row else {}
+            answers = (supplement.get('answers') or [supplement]) if supplement else []
+            if answers:
+                chat._post_user_db(db, child, '已确认需求补充：\n\n' + '\n\n'.join(
+                    (q.get('question') or q.get('question_id', '需求补充')) + '\n' + q['answer']['text'] for q in answers), key)
+            result = {'task_id': child, 'child_task_id': child, 'job_id': job_id, 'parent_task_id': task_id,
+                      'enqueued': enqueue}
+            db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
+                (identifier(), task_id, 'handoff', key, task['input_hash'], dumps(result), timestamp))
+            db.execute("UPDATE testing_agent_tasks SET status='partial',error='',next_action=?,updated_at=?,revision=revision+1 WHERE id=?",
+                       ('需求补充已确认，Agent 正在关联版本继续处理。', timestamp, task_id))
+            self._event(db, task_id, 'requirements_continued', {**result, 'question_ids': sorted(question_revisions)})
+            return result
 
     def review_feedback(self, task_id, case_id, category, reason, expected_version=None, expected_revision=None):
         if category not in FEEDBACK_ROUTES or not reason.strip() or len(reason) > 2000:

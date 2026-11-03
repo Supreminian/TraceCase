@@ -150,6 +150,50 @@ def test_shared_resources_http_and_fixed_task_binding(context):
     assert fixed['resources'][0]['revision'] == 2 and fixed['resources'][0]['business_fact_confirmed'] is False
 
 
+def test_chat_api_requires_explicit_idempotent_failure_confirmation(context):
+    from sdlc.testing_agent.chat import ChatService
+    task_id, work_id = create(context)
+    path, _, token, _, workspace, _, project, client = context
+    service = TestingService(path, token, workspace, project)
+    chat = ChatService(service)
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE agent_work_items SET status='failed' WHERE id=?", (work_id,))
+    pending = chat.request_confirmation(task_id, reason='timeout', request_key='http-failure')
+    endpoint = url(f'/api/agent/tasks/{task_id}/chat', workspace, project)
+    state = client.get(endpoint)
+    assert state.status_code == 200
+    assert state.json()['pending_confirmation']['id'] == pending['id']
+    proof = headers(client, workspace, project)
+    action = url(f'/api/agent/tasks/{task_id}/chat_confirmation', workspace, project)
+    payload = {'confirmation_id': pending['id'], 'choice': 'retry', 'expected_revision': 1, 'request_key': 'retry-http-once'}
+    result = client.post(action, json=payload, headers=proof)
+    assert result.status_code == 202, result.text
+    assert client.post(action, json=payload, headers=proof).json()['job_id'] == result.json()['job_id']
+    assert client.get(endpoint).json()['pending_confirmation'] is None
+    assert any(m['role'] == 'user' and '确认重试' in m['content'] for m in client.get(endpoint).json()['messages'])
+
+
+def test_chat_api_accepts_waiting_reply_for_model_judgment_without_approving_retry(context):
+    from sdlc.testing_agent.chat import ChatService
+    task_id, work_id = create(context)
+    path, _, token, _, workspace, _, project, client = context
+    service = TestingService(path, token, workspace, project)
+    chat = ChatService(service)
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE agent_work_items SET status='failed' WHERE id=?", (work_id,))
+    chat.request_confirmation(task_id, reason='timeout', request_key='http-failure')
+    endpoint = url(f'/api/agent/tasks/{task_id}/chat', workspace, project)
+    proof = headers(client, workspace, project)
+    payload = {'content': '继续', 'request_key': 'natural-http-reply'}
+    result = client.post(endpoint, json=payload, headers=proof)
+    assert result.status_code == 202, result.text
+    assert client.post(endpoint, json=payload, headers=proof).json() == result.json()
+    record = chat.list_confirmations(task_id)[0]
+    assert record['choice'] == 'discuss' and record['content'] == '继续'
+    assert chat.get_pending(task_id) is None
+    assert chat.list_messages(task_id)[-1]['content'] == '继续'
+
+
 def seed_question(service, task_id):
     service.save_analysis(task_id, {
         "features": [{"id": "F1", "description": "提交报销单", "paragraph_ids": ["P002"]}],
