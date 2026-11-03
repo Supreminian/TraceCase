@@ -451,3 +451,36 @@ def test_completed_chat_budget_exhaustion_is_visible_not_silently_discarded(conv
     assert any('本次对话达到处理预算上限' in m['content'] for m in chat.list_messages(task_id))
     assert service.get_task(task_id)['status'] == 'completed'
     assert not chat.get_pending(task_id)
+
+
+@pytest.mark.parametrize('terminal_status', ['cancelled', 'failed', 'completed'])
+def test_new_query_recovers_stranded_completed_chat_without_replaying_old_calls(conversation, terminal_status):
+    service, chat, task_id = conversation
+    # Model a stopped worker that had persisted a running turn and a pending call.
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    old_job = worker.enqueue(service, task_id, 'message', '旧查询', request_key='interrupted-old-query')
+    runtime = build_runtime(service.db_path, service.token, service.workspace_id, service.project_id,
+                            task_id, model_client=ConversationModel())
+    session = runtime.agent.new_session({'task_id': task_id, 'workspace_id': service.workspace_id,
+                                         'project_id': service.project_id})
+    session.metadata['agent_turn'] = {'id': 'stranded-turn', 'status': 'running', 'request_id': old_job}
+    runtime.agent._append(session, AssistantMessage(content='旧调用', tool_calls=[
+        ToolCall(id='abandoned-call', name='list_test_cases', arguments={'status': 'returned'})]))
+    with service.connection('generate', True) as db:
+        db.execute('UPDATE testing_agent_tasks SET session_id=? WHERE id=?', (session.id, task_id))
+        db.execute('UPDATE agent_work_items SET status=? WHERE id=?', (terminal_status, old_job))
+    worker.enqueue(service, task_id, 'message', '展示所有已批准用例', request_key='query-after-interruption')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='查询最新的批准状态。', tool_calls=[ToolCall(
+            id='fresh-query', name='list_test_cases', arguments={'status': 'approved'})]),
+        AssistantMessage(content='查询结果已直接显示。'))
+    execute_next(service, client, task_id=task_id)
+    cards = [json.loads(m['content']) for m in chat.list_messages(task_id) if m['kind'] == 'case_collection']
+    assert len(cards) == 1
+    assert cards[0]['query']['status'] == 'approved'
+    after = runtime.agent.get_session(session.id)
+    old_results = [m for m in after.messages if m.role == 'tool' and m.tool_call_id == 'abandoned-call']
+    assert len(old_results) == 1 and old_results[0].is_error
+    assert any(e['action'] == 'orphaned_turn_recovered' and not e['details']['old_calls_replayed']
+               for e in service.get_task(task_id)['events'])

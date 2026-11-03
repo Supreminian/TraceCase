@@ -209,6 +209,24 @@ class AgentService:
                         seen.add(call.id)
         return pending
 
+    def interrupt_orphaned_turn(self, session_id: str, expected_request_id: str) -> bool:
+        """Settle abandoned protocol calls without replaying their side effects.
+
+        The application must first prove that the owning durable job is terminal.
+        Optimistic session revisions prevent concurrent recovery from overwriting work.
+        """
+        session = self.get_session(session_id)
+        state = session.metadata.get('agent_turn', {})
+        if state.get('status') != 'running' or state.get('request_id') != expected_request_id:
+            return False
+        self._authorize(session)
+        for call in self._pending(session):
+            self._append(session, ToolResult(tool_call_id=call.id, is_error=True,
+                content='原执行请求已结束，此未完成调用不会自动重放；请依据用户新消息重新决定下一步。'))
+        state.update(status='failed', error='原执行请求已中断，允许接收新的用户消息。')
+        self._touch(session)
+        return True
+
     def send_message(self, session_id: str, content: str,
                      on_event: EventHandler | None = None, *,
                      request_id: str | None = None) -> Session:

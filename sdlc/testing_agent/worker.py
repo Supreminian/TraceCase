@@ -251,7 +251,7 @@ def execute(path, job, owner, *, runtime_factory=None):
                 chat.handle_event(job['task_id'], {'type': 'completed'}, request_key=job['id'])
         with store.db(write=True) as db:
             db.execute("UPDATE agent_work_items SET status='completed',lease_until=NULL,updated_at=? WHERE id=? AND lease_owner=? AND status='running'", (time.time(), job['id'], owner))
-    except Exception:
+    except Exception as exc:
         # No provider exception text is accepted as public chat or queue content.
         message = '本轮任务暂未完成，已有成果已保留；请在对话中确认下一步。'
         with store.db(write=True) as db:
@@ -263,6 +263,8 @@ def execute(path, job, owner, *, runtime_factory=None):
                 with delegated_identity(path, job) as token:
                     service = TestingService(path, token, job['workspace_id'], job['project_id'])
                     service.execution_capability = json.loads(job['payload']).get('capability', 'generate')
+                    service.record_event(job['task_id'], {'type': 'worker_request_failed',
+                        'request_id': job['id'], 'error_class': type(exc).__name__[:80]})
                     ChatService(service).request_confirmation(job['task_id'], request_key=job['id'])
             except Exception:
                 # Revoked access must not be bypassed to publish a confirmation.

@@ -153,7 +153,7 @@ class BudgetedClient:
                 'settings': model_settings.model_dump(), 'output_type': context.output_type.__name__,
                 'instruction': context.instruction,
                 'instruction_hash': hashlib.sha256(context.instruction.encode()).hexdigest(),
-                'prompt_version': 'TESTING-AGENT-CHAT-R6', 'memory': context.memory, 'agents_md': context.agents_md,
+                'prompt_version': 'TESTING-AGENT-CHAT-R7', 'memory': context.memory, 'agents_md': context.agents_md,
                 'messages': [message.model_dump(exclude={'metadata'}) for message in context.messages],
                 'public_output': getattr(self.client, 'last_public_output', None),
                 'usage': usage, 'metadata': event,
@@ -185,6 +185,21 @@ class Runtime:
             if self.public_event_sink:
                 self.public_event_sink(item)
         try:
+            # Only a terminal prior durable job can release a stranded core turn.
+            # Never resume old side effects merely because a new message arrived.
+            if request_id:
+                previous = self.agent.get_session(session_id).metadata.get('agent_turn', {})
+                prior_id = previous.get('request_id')
+                if previous.get('status') == 'running' and prior_id and prior_id != request_id:
+                    with self.service.connection() as db:
+                        row = db.execute('SELECT status FROM agent_work_items WHERE id=? AND task_id=?',
+                                         (prior_id, self.task_id)).fetchone()
+                    if row and row['status'] in {'cancelled', 'failed', 'completed'}:
+                        self.guard()
+                        if self.agent.interrupt_orphaned_turn(session_id, prior_id):
+                            self.service.record_event(self.task_id, {'type': 'orphaned_turn_recovered',
+                                'previous_request_id': prior_id, 'request_id': request_id,
+                                'previous_job_status': row['status'], 'old_calls_replayed': False})
             if task['status'] == 'completed':
                 self.agent.model_client.begin_conversation(request_id)
             if content:
