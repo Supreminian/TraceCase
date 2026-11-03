@@ -35,6 +35,21 @@ CSS = '''<style>
 .tc-agent-indicator {width:6px;height:6px;border-radius:50%;background:#6879d3;box-shadow:0 0 0 3px #e5e9ff}
 .st-key-agent_chat_shell [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {overflow-wrap:anywhere}
 .st-key-agent_chat_shell [data-testid="stChatMessage"] p {line-height:1.75;font-size:14px}
+/* Readable rich text spacing, scoped to Agent replies only. */
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) {padding:20px 22px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] {gap:12px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stMarkdownContainer"] {line-height:1.85;font-size:14px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(p,li) {line-height:1.85}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) p {margin:0 0 14px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(h1,h2,h3,h4,h5,h6) {margin:22px 0 10px!important;padding:0!important;line-height:1.5!important}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(ul,ol) {margin:10px 0 16px;padding-left:24px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) li {margin:7px 0;padding-left:3px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) li > p {margin:0 0 8px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) li > :is(ul,ol) {margin:6px 0 10px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(pre,blockquote,table) {margin:16px 0}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(th,td) {padding:10px 12px;line-height:1.7}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stMarkdownContainer"] > :first-child {margin-top:0!important}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stMarkdownContainer"] > :last-child {margin-bottom:0}
 .st-key-agent_chat_shell [data-testid="stChatInput"] {border:1px solid #cfd8e8;border-radius:15px;background:#f8faff;box-shadow:0 3px 12px #26365006}
 .st-key-agent_chat_shell div:has(> [class*="st-key-chat_history_"]) {height:auto!important;flex:1 1 0!important;min-height:0}
 .st-key-agent_chat_shell [class*="st-key-chat_history_"] {min-height:0;overscroll-behavior:contain}
