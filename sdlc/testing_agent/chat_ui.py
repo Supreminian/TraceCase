@@ -62,10 +62,16 @@ CSS = '''<style>
 .st-key-chat_composer {position:relative;flex-shrink:0}
 .st-key-chat_composer:has(.st-key-chat_stop_generation) [data-testid="stChatInputSubmitButton"] {visibility:hidden;pointer-events:none}
 .st-key-chat_composer:has(.st-key-chat_stop_generation) [data-testid="stChatInput"] textarea {padding-right:52px}
-.st-key-chat_composer > div:has(> .st-key-chat_stop_generation) {position:absolute!important;right:12px;bottom:12px;width:34px!important;z-index:2}
-.st-key-chat_stop_generation button {width:34px!important;min-height:34px!important;height:34px;padding:0!important;border-radius:50%!important;background:#243454!important;border:0!important;color:white!important}
+.st-key-chat_composer > div:has(> .st-key-chat_stop_generation) {position:absolute!important;right:18px;bottom:14px;width:32px!important;z-index:2}
+.st-key-chat_composer [data-testid="stChatInputSubmitButton"],
+.st-key-chat_stop_generation button {width:32px!important;min-width:32px!important;min-height:32px!important;height:32px!important;padding:4px!important;border-radius:9px!important;background:#243454!important;border:0!important;color:white!important;display:flex;align-items:center;justify-content:center;box-shadow:none!important;transition:background-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.st-key-chat_composer [data-testid="stChatInputSubmitButton"]:disabled {background:#e1e8f2!important;color:#8c9aaf!important}
+.st-key-chat_stop_generation button [data-testid="stIconMaterial"],
+.st-key-chat_composer [data-testid="stChatInputSubmitButton"] svg {width:24px;height:24px;font-size:24px;line-height:24px;margin:0}
 .st-key-chat_stop_generation button [data-testid="stMarkdownContainer"] {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.st-key-chat_composer [data-testid="stChatInputSubmitButton"]:not(:disabled):hover,
 .st-key-chat_stop_generation button:hover {background:#354b72!important}
+.st-key-chat_composer [data-testid="stChatInputSubmitButton"]:focus-visible,
 .st-key-chat_stop_generation button:focus-visible {outline:3px solid #9bade5;outline-offset:3px}
 .tc-chat-state {font-size:12px;color:#778398;padding:8px 2px;border-bottom:1px solid #edf0f5;display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
 .tc-chat-source {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 120px;color:#8b95a6}
