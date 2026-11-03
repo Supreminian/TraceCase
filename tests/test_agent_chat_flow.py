@@ -384,7 +384,7 @@ def test_case_cards_survive_failure_after_successful_query(conversation):
     worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='query-before-failure')
     client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
         AssistantMessage(content='我来查询当前项目的批准用例。', tool_calls=[
-            ToolCall(id='query-approved', name='list_test_cases', arguments={'status': 'approved'})]),
+            ToolCall(id='query-approved', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
         RuntimeError('provider unavailable'))
     # The business result is durable before the next model turn fails.
     owner = 'query-worker'
@@ -411,7 +411,7 @@ def test_approved_project_query_uses_authorization_not_model_review(conversation
     worker.enqueue(service, task_id, 'message', '展示本项目全部已批准用例', request_key='approved-real-query')
     client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
         AssistantMessage(content='我来读取本项目的批准用例。', tool_calls=[ToolCall(
-            id='approved-project', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project'})]),
+            id='approved-project', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
         AssistantMessage(content='已在聊天中展示批准用例。'))
     execute_next(service, client, task_id=task_id)
     assert not any(context.output_type is Decision for context in client.contexts)
@@ -466,14 +466,14 @@ def test_new_query_recovers_stranded_completed_chat_without_replaying_old_calls(
                                          'project_id': service.project_id})
     session.metadata['agent_turn'] = {'id': 'stranded-turn', 'status': 'running', 'request_id': old_job}
     runtime.agent._append(session, AssistantMessage(content='旧调用', tool_calls=[
-        ToolCall(id='abandoned-call', name='list_test_cases', arguments={'status': 'returned'})]))
+        ToolCall(id='abandoned-call', name='list_test_cases', arguments={'status': 'returned', 'scope': 'task', 'display_only': False})]))
     with service.connection('generate', True) as db:
         db.execute('UPDATE testing_agent_tasks SET session_id=? WHERE id=?', (session.id, task_id))
         db.execute('UPDATE agent_work_items SET status=? WHERE id=?', (terminal_status, old_job))
     worker.enqueue(service, task_id, 'message', '展示所有已批准用例', request_key='query-after-interruption')
     client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
         AssistantMessage(content='查询最新的批准状态。', tool_calls=[ToolCall(
-            id='fresh-query', name='list_test_cases', arguments={'status': 'approved'})]),
+            id='fresh-query', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
         AssistantMessage(content='查询结果已直接显示。'))
     execute_next(service, client, task_id=task_id)
     cards = [json.loads(m['content']) for m in chat.list_messages(task_id) if m['kind'] == 'case_collection']
@@ -484,3 +484,33 @@ def test_new_query_recovers_stranded_completed_chat_without_replaying_old_calls(
     assert len(old_results) == 1 and old_results[0].is_error
     assert any(e['action'] == 'orphaned_turn_recovered' and not e['details']['old_calls_replayed']
                for e in service.get_task(task_id)['events'])
+
+
+def test_agent_can_choose_direct_card_delivery_without_followup_model_call(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '只展示本项目已批准用例', request_key='direct-display')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='直接展示批准用例。', tool_calls=[ToolCall(
+            id='direct-query', name='list_test_cases', arguments={
+                'status': 'approved', 'scope': 'project', 'display_only': True})]))
+    execute_next(service, client, task_id=task_id)
+    assert len(client.contexts) == 2  # Intent and the Agent's chosen action; no rewrite call.
+    assert any(m['kind'] == 'case_collection' for m in chat.list_messages(task_id))
+    assert not any(m['state'] == 'error' for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+
+
+def test_completed_chat_failure_notice_replaces_core_notice_instead_of_duplicating(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    chat.handle_event(task_id, {'type': 'assistant_message', 'message_id': 'failure',
+                               'content': '原错误提示'}, request_key='failure-request')
+    chat.handle_event(task_id, {'type': 'waiting_confirmation', 'message_id': 'failure',
+                               'kind': 'retry_generation', 'error': 'model unavailable'}, request_key='failure-request')
+    replies = assistant_replies(chat, task_id)
+    assert len(replies) == 1
+    assert replies[0]['state'] == 'error'
+    assert '本次回复暂未完成' in replies[0]['content']

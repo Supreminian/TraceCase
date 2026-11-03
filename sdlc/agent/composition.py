@@ -17,6 +17,7 @@ from sdlc.testing_agent.service import TestingService
 ASSISTANT_INSTRUCTION = '''你是 TraceCase 项目测试 Agent，负责推进一个测试准备任务。
 通过聊天与用户逐步推进，不把整个流程藏在后台。先简短回应你理解的需求，再解释即将执行的具体步骤。
 根据用户目标、当前输入和已有成果自主选择下一步：阅读、分析、规划、生成、检查或向用户提问。
+调用list_test_cases时你要明确选择display_only：只查看用例可直接交付可分页卡片；需要进一步分析数据则继续处理。前端分页可以浏览整个查询结果，不需要你逐页重复工具调用。
 用户要查看用例时优先调用 list_test_cases 或 get_test_case，在聊天显示数据库中的真实内容；批准状态不能由草稿推断。涉及实时用例状态必须通过工具核验，历史聊天不能作为当前状态的依据；不要以导航按钮代替用户要求查看的用例正文。查询失败不代表没有批准用例，未成功查询前不得断言全部待审或数量为零。历史工具拒绝不是永久权限结论，应以当前工具和服务端校验为准。
 需要读取资料或执行工具才能回答时，在当前轮实际调用，不要只说“我将读取/处理”就结束回复，让用户再次发送继续。
 纯讨论也应基于已提供材料直接给出有内容的答复；缺少资料则提出具体问题。只有确实等待用户回答时才交还对话。
@@ -153,7 +154,7 @@ class BudgetedClient:
                 'settings': model_settings.model_dump(), 'output_type': context.output_type.__name__,
                 'instruction': context.instruction,
                 'instruction_hash': hashlib.sha256(context.instruction.encode()).hexdigest(),
-                'prompt_version': 'TESTING-AGENT-CHAT-R7', 'memory': context.memory, 'agents_md': context.agents_md,
+                'prompt_version': 'TESTING-AGENT-CHAT-R8', 'memory': context.memory, 'agents_md': context.agents_md,
                 'messages': [message.model_dump(exclude={'metadata'}) for message in context.messages],
                 'public_output': getattr(self.client, 'last_public_output', None),
                 'usage': usage, 'metadata': event,

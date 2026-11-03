@@ -66,6 +66,14 @@ class UserInputRequired(AgentError):
         super().__init__(self.prompt)
 
 
+class ToolDelivered(AgentError):
+    """A tool delivered a public artifact and the Agent chose to end this reply."""
+
+    def __init__(self, content: str):
+        self.content = content
+        super().__init__('Tool result delivered')
+
+
 class TaskHandoff(AgentError):
     """A trusted business tool has durably created a related task to continue in."""
 
@@ -540,6 +548,17 @@ class AgentService:
                                     content="工具返回内容过长，请缩小读取范围后重试。")
             else:
                 result = ToolResult(tool_call_id=call.id, content=content)
+        except ToolDelivered as exc:
+            ledger[call.id]['status'] = 'completed'
+            state['status'] = 'completed'
+            self._append(session, ToolResult(tool_call_id=call.id, content=exc.content))
+            for pending_call in self._pending(session):
+                self._append(session, ToolResult(tool_call_id=pending_call.id, is_error=True,
+                    content='Agent已选择直接展示结果并结束本轮，此排队调用未执行。'))
+            self._emit(on_event, 'tool_completed', session, tool_call_id=call.id,
+                       tool=call.name, is_error=False)
+            self._emit(on_event, 'completed', session)
+            return
         except TaskHandoff as exc:
             ledger[call.id]["status"] = "completed"
             state.update(status="completed", child_task_id=exc.child_task_id)

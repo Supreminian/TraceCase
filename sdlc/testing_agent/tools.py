@@ -5,7 +5,7 @@ import difflib
 import json
 
 from sdlc.agent.domain import Context, Tool, UserMessage
-from sdlc.agent.application import PublicToolError, UserInputRequired, TaskHandoff
+from sdlc.agent.application import PublicToolError, UserInputRequired, TaskHandoff, ToolDelivered
 from sdlc.service import ServiceError, dumps
 from sdlc.testing_agent.domain import (CaseBatch, CoveragePlan, RequirementAnalysis,
                                       RevisionProposal, EvidenceReview)
@@ -377,12 +377,15 @@ def build_tools(service, task_id, model_client, settings):
     from sdlc.domain import Clarification
     from sdlc.testing_agent.case_browser import get_case, publish_collection
 
-    def list_test_cases(status='all', scope='project', keyword='', page=1):
+    def list_test_cases(status='all', scope='project', keyword='', page=1, display_only=False):
         if scope not in {'project', 'task'}:
             raise ServiceError('查询范围必须是当前项目或当前任务。')
-        return publish_collection(service, task_id, query={
+        result = publish_collection(service, task_id, query={
             'status': status, 'task_id': task_id if scope == 'task' else None,
             'keyword': keyword, 'page': page, 'page_size': 5})
+        if display_only:
+            raise ToolDelivered(dumps(result))
+        return result
 
     def get_test_case(run_id, case_id):
         detail = get_case(service, run_id, case_id)
@@ -392,10 +395,11 @@ def build_tools(service, task_id, model_client, settings):
     clarification_schema = Clarification.model_json_schema()
     return [
         BusinessTool('list_test_cases', '在聊天中直接展示当前项目或任务的真实用例卡片，可筛选批准/待审/退回、关键词并分页。用户要查看所有批准用例时使用此工具，不要从阶段草稿推断审批状态。',
-                     parameters({'status': {'type': 'string', 'enum': ['all', 'approved', 'pending_review', 'returned']},
-                                 'scope': {'type': 'string', 'enum': ['project', 'task']},
+                     parameters({'status': {'type': 'string', 'enum': ['all', 'approved', 'pending_review', 'returned'], 'description': 'approved仅人工审核通过；all同时包含未审核和退回用例。'},
+                                 'scope': {'type': 'string', 'enum': ['project', 'task'], 'description': 'project读取当前项目所有运行；task仅当前对话任务，不含项目其他任务。'},
                                  'keyword': {'type': 'string', 'maxLength': 200},
-                                 'page': {'type': 'integer', 'minimum': 1}}), list_test_cases),
+                                 'page': {'type': 'integer', 'minimum': 1},
+                                 'display_only': {'type': 'boolean', 'description': '由你决定：只展示给用户时true，卡片已含完整分页浏览能力，交付后结束本轮；还需分析工具结果时false。'}}, ['status', 'scope', 'display_only']), list_test_cases),
         BusinessTool('get_test_case', '读取并在聊天展示指定运行的当前真实用例及关联需求依据。run_id和case_id必须来自查询结果。',
                      parameters({'run_id': string, 'case_id': string}, ['run_id', 'case_id']), get_test_case),
         BusinessTool('read_task', '读取当前授权测试任务、版本、资料和问题。', parameters(), read_task),
