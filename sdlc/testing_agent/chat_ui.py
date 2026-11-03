@@ -276,10 +276,12 @@ def live_conversation(service, chat, task_id):
     status = LABELS.get(task['status'], '继续当前对话')
     document_context = service.artifact(task_id, 'document_context')
     title = document_context['target_product'] if document_context else task['input']['summary']['title']
+    source_label = ('<span>·</span>尚未提供需求' if task['input'].get('kind') == 'conversation'
+                    else '<span>·</span>需求版本 ' + str(task['document_version'])
+                    + '<span class="tc-chat-source" title="' + html.escape(title, quote=True) + '">本轮需求：'
+                    + html.escape(title) + '</span>')
     st.markdown('<div class="tc-chat-state"><span class="tc-state-dot ' + ('active' if active else '') + '"></span>'
-                + html.escape(status) + '<span>·</span>需求版本 ' + str(task['document_version'])
-                + '<span class="tc-chat-source" title="' + html.escape(title, quote=True) + '">本轮需求：'
-                + html.escape(title) + '</span></div>', unsafe_allow_html=True)
+                + html.escape(status) + source_label + '</div>', unsafe_allow_html=True)
     with st.container(height=360, border=False, autoscroll=True, key='chat_history_' + task_id):
         if not messages:
             with _message('assistant'):
@@ -311,7 +313,7 @@ def live_conversation(service, chat, task_id):
                 if message['state'] == 'interrupted':
                     st.caption('这段回复已中断，已有内容保留。')
         if active and not pending:
-            stage = STAGES.get(task['stage'], '正在整理下一步')
+            stage = '正在理解你的消息' if task['stage'] == 'conversation' else STAGES.get(task['stage'], '正在整理下一步')
             st.markdown('<div class="tc-thinking" role="status" aria-live="polite"><span class="tc-thinking-orb">✦</span>'
                 '<span class="tc-thinking-label">' + html.escape(stage) + '</span><span class="tc-thinking-dots"><span></span><span></span><span></span></span></div>', unsafe_allow_html=True)
         if progress and active:
@@ -337,7 +339,8 @@ def _new_conversation(service, options):
         if value:
             def create():
                 content, document = _read_input(value)
-                return _start(service, document or content, content if document else '', options=options)
+                return service.create_conversation(document or content,
+                    instruction=content if document else '', **options)
             task_id = _safe_action(create)
             if task_id:
                 _select_next(service, task_id)
@@ -422,7 +425,9 @@ def _workspace_contents(legacy, service, chat):
     ids = [None] + [t['id'] for t in tasks]
     # Goals and document versions are immutable within a task. Status belongs to
     # the live conversation header, where updating it cannot change wire values.
-    labels = {task['id']: task['goal'][:45] + f" · 需求 {task['document_version']} · {task['id'][:8]}" for task in tasks}
+    labels = {task['id']: task['goal'][:45]
+              + ('' if task['input'].get('kind') == 'conversation' else f" · 需求 {task['document_version']}")
+              + ' · ' + task['id'][:8] for task in tasks}
     left, right, setting_column = st.columns([4, 1, 1])
     selected = left.selectbox('当前对话', ids, key=key, label_visibility='collapsed',
         placeholder='新对话', format_func=lambda tid: '新对话' if tid is None else labels.get(tid, str(tid)))
@@ -482,6 +487,11 @@ def _workspace_contents(legacy, service, chat):
                 if document:
                     if 'generate' not in permissions:
                         raise ValueError('当前角色不能创建需求新版本。')
+                    if task['input'].get('kind') == 'conversation':
+                        if content:
+                            chat.post_user(selected, content, request_key=uuid4().hex)
+                        worker.enqueue(service, selected, 'message', document, request_key=uuid4().hex)
+                        return selected
                     if pending:
                         chat.respond(selected, pending['id'], 'stop', expected_revision=pending['revision'], request_key=uuid4().hex)
                     return _start(service, document, content or task['goal'], selected, options)

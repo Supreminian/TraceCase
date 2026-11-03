@@ -108,11 +108,14 @@ class AgentService:
                  max_iterations: int = 8, max_tool_calls: int = 24,
                  authorize: Authorizer | None = None, max_duration_seconds: float = 300,
                  pause_on_tool_error: bool = False,
-                 tool_review_policy: Callable[[Session, ToolCall], Decision | None] | None = None):
+                 tool_review_policy: Callable[[Session, ToolCall], Decision | None] | None = None,
+                 max_argument_repairs: int = 0):
         if not 1 <= max_iterations <= 100 or not 1 <= max_tool_calls <= 500:
             raise ValueError("Agent iteration and tool limits must be bounded positive values.")
         if not 0 < max_duration_seconds <= 3600:
             raise ValueError("Agent duration must be between 0 and 3600 seconds.")
+        if isinstance(max_argument_repairs, bool) or not isinstance(max_argument_repairs, int) or not 0 <= max_argument_repairs <= 3:
+            raise ValueError("Argument repair limit must be an integer between 0 and 3.")
         names = [tool.name for tool in assistant.tools]
         if len(set(names)) != len(names):
             raise ValueError("Tool names must be unique.")
@@ -132,6 +135,7 @@ class AgentService:
         self.authorize = authorize
         self.pause_on_tool_error = pause_on_tool_error
         self.tool_review_policy = tool_review_policy
+        self.max_argument_repairs = max_argument_repairs
         self._tools = {tool.name: tool for tool in assistant.tools}
 
     @staticmethod
@@ -464,6 +468,34 @@ class AgentService:
                 "检查需求、参数或模型配置后继续。")
         self._append(session, result)
 
+    @staticmethod
+    def _argument_error(errors: list[Any]) -> str:
+        """Describe constraints using trusted schema fields, never argument values.
+
+        jsonschema's message and instance paths can contain private user values or
+        arbitrary extra property names, so neither is copied into model feedback.
+        """
+        details = []
+        for error in errors[:5]:
+            schema_path = list(error.absolute_schema_path)
+            fields = [str(schema_path[index + 1]) for index, item in enumerate(schema_path[:-1])
+                      if item == 'properties']
+            location = '.'.join(fields) or '$'
+            constraint = error.validator
+            if constraint == 'required' and isinstance(error.instance, dict):
+                missing = [name for name in error.validator_value if name not in error.instance]
+                detail = '缺少必填参数：' + '、'.join(missing)
+            elif constraint == 'type':
+                detail = '类型必须为 ' + json.dumps(error.validator_value, ensure_ascii=False)
+            elif constraint == 'enum':
+                detail = '只允许 ' + json.dumps(error.validator_value, ensure_ascii=False)
+            elif constraint == 'additionalProperties':
+                detail = '包含未声明的参数；只允许 ' + '、'.join(error.schema.get('properties', {}))
+            else:
+                detail = '不满足约束 ' + str(constraint)
+            details.append(location + '：' + detail)
+        return ('工具参数未通过结构校验；工具尚未执行。' + '；'.join(dict.fromkeys(details)))[:2000]
+
     def _execute_call(self, session: Session, call: ToolCall,
                       remaining: Callable[[], float], on_event: EventHandler | None) -> None:
         self._authorize(session, call)
@@ -479,16 +511,16 @@ class AgentService:
             return
         tool = self._tools.get(call.name)
         error = None
+        argument_error = False
         if tool is None:
             error = "此工具不可用，请使用已授权的工具。"
         else:
             try:
                 errors = sorted(Draft202012Validator(tool.parameters).iter_errors(call.arguments),
-                                key=lambda item: str(list(item.path)))
+                                key=lambda item: str(list(item.absolute_schema_path)))
                 if errors:
-                    # Values are intentionally omitted from validation errors.
-                    locations = [".".join(str(p) for p in e.path) or "$" for e in errors[:5]]
-                    error = "工具参数未通过结构校验：" + "、".join(locations)
+                    error = self._argument_error(errors)
+                    argument_error = True
             except Exception:
                 error = "工具参数结构配置不可用，本次调用已拒绝。"
         if error is None:
@@ -523,6 +555,17 @@ class AgentService:
             except Exception:
                 error = "工具审核暂时不可用，本次调用已拒绝。"
         if error is not None:
+            if argument_error and state.get('argument_repairs', 0) < self.max_argument_repairs:
+                # Nothing has executed or been claimed in the side-effect ledger.
+                # Ask the model to correct its invocation, not the user to debug it.
+                state['argument_repairs'] = state.get('argument_repairs', 0) + 1
+                self._append(session, ToolResult(tool_call_id=call.id, is_error=True,
+                    content=error + '。请按当前工具定义修正参数，以新的调用标识重新调用；不要声称工具已执行。'))
+                self._emit(on_event, 'tool_arguments_invalid', session, tool_call_id=call.id,
+                           tool=call.name, reason=error, repair_attempt=state['argument_repairs'])
+                return
+            if argument_error and self.max_argument_repairs and not self.pause_on_tool_error:
+                state.update(status='limited', limit_reason='工具参数修正已达到本轮上限，工具未执行。请检查现有结果后再继续。')
             self._tool_result(session, call, ToolResult(tool_call_id=call.id, content=error, is_error=True))
             self._emit(on_event, "tool_denied", session, tool_call_id=call.id,
                        tool=call.name, reason=error)

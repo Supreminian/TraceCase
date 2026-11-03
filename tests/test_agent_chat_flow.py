@@ -502,6 +502,25 @@ def test_agent_can_choose_direct_card_delivery_without_followup_model_call(conve
     assert service.get_task(task_id)['status'] == 'completed'
 
 
+def test_agent_corrects_omitted_new_query_argument_before_direct_card_delivery(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='repair-query-shape')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(tool_calls=[ToolCall(id='stale-query', name='list_test_cases',
+            arguments={'status': 'approved', 'scope': 'project'})]),
+        AssistantMessage(tool_calls=[ToolCall(id='correct-query', name='list_test_cases',
+            arguments={'status': 'approved', 'scope': 'project', 'display_only': True})]))
+    execute_next(service, client, task_id=task_id)
+    assert len(client.contexts) == 3  # Intent, old call, model-corrected call; no rewrite.
+    feedback = [m.content for m in client.contexts[-1].messages if m.role == 'tool']
+    assert any('缺少必填参数：display_only' in content for content in feedback)
+    assert len([m for m in chat.list_messages(task_id) if m['kind'] == 'case_collection']) == 1
+    assert not any(m['state'] == 'error' for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+
+
 def test_completed_chat_failure_notice_replaces_core_notice_instead_of_duplicating(conversation):
     service, chat, task_id = conversation
     with service.connection('generate', True) as db:

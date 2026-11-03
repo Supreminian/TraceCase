@@ -57,7 +57,9 @@ def test_empty_task_board_creates_durable_work_without_network(tmp_path):
     assert len(tasks) == 1
     with service.accounts.db() as db:
         assert db.execute("SELECT status FROM agent_work_items WHERE task_id=?", (tasks[0]['id'],)).fetchone()[0] == 'queued'
-    assert any('正在理解需求' in m.value for m in app.markdown)
+    assert tasks[0]['input']['paragraphs'] == []
+    assert any('正在理解你的消息' in m.value for m in app.markdown)
+    assert any('尚未提供需求' in m.value for m in app.markdown)
 
 
 def test_task_review_and_delivery_remain_separate_from_execution(tmp_path):

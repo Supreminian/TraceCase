@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from sdlc.agent import Assistant, AssistantMessage, Decision, ModelSettings, Reviewer, ToolCall, ToolResult
-from sdlc.agent.application import AgentService, ModelUnavailableError, PublicToolError, TaskHandoff, UserInputRequired
+from sdlc.agent.application import AgentService, ModelUnavailableError, PublicToolError, TaskHandoff, ToolDelivered, UserInputRequired
 from sdlc.agent.composition import BudgetedClient
 from tests.test_agent_core import MemoryStore, ReadTool, ScriptedClient, invocation, make_agent
 
@@ -141,6 +141,81 @@ def test_main_model_failure_asks_user_instead_of_automatic_retry():
     assert paused.messages[-1].role == 'assistant'
     assert agent.resume(paused.id) == paused
     assert len(client.contexts) == 1 and 'PRIVATE' not in str(events)
+
+
+def test_missing_new_tool_argument_can_be_corrected_by_model_then_delivered_directly():
+    tool = ReadTool()
+    tool.parameters = {'type': 'object', 'properties': {'display_only': {'type': 'boolean'}},
+                       'required': ['display_only'], 'additionalProperties': False}
+    tool.error = ToolDelivered('已展示真实用例卡片。')
+    stale_call = AssistantMessage(tool_calls=[ToolCall(id='old-shape', name=tool.name, arguments={})])
+    corrected = AssistantMessage(tool_calls=[ToolCall(id='corrected', name=tool.name,
+                                                     arguments={'display_only': True})])
+    agent, _, _, client = make_agent(stale_call, corrected, Decision(should_allow=True),
+        tool=tool, pause_on_tool_error=True, max_argument_repairs=2)
+    events = []
+    result = agent.send_message(agent.new_session().id, '展示已批准用例', events.append)
+    assert result.metadata['agent_turn']['status'] == 'completed'
+    assert result.metadata['agent_turn']['argument_repairs'] == 1
+    assert tool.calls == [{'display_only': True}]
+    assert len(client.contexts) == 3  # Two decisions and one review, no rewrite after delivery.
+    failure = next(m for m in result.messages if isinstance(m, ToolResult) and m.is_error)
+    assert '缺少必填参数：display_only' in failure.content
+    assert 'old-shape' not in result.metadata['tool_executions']
+    assert any(event['type'] == 'tool_arguments_invalid' for event in events)
+    assert not any(event['type'] == 'waiting_confirmation' for event in events)
+
+
+@pytest.mark.parametrize('pause_on_tool_error', [True, False])
+def test_argument_repairs_are_bounded_per_turn_and_never_execute_invalid_calls(pause_on_tool_error):
+    invalid = [AssistantMessage(tool_calls=[ToolCall(id=f'invalid-{i}', name='read_requirement',
+                                                   arguments={})]) for i in range(3)]
+    agent, store, tool, client = make_agent(*invalid, pause_on_tool_error=pause_on_tool_error, max_argument_repairs=2)
+    result = agent.send_message(agent.new_session().id, '读取需求')
+    assert result.metadata['agent_turn']['status'] == ('waiting_confirmation' if pause_on_tool_error else 'limited')
+    assert result.metadata['agent_turn']['argument_repairs'] == 2
+    assert len(client.contexts) == 3 and not tool.calls
+    assert not result.metadata.get('tool_executions')
+    assert not agent._pending(result)
+    recovered, _, _, next_client = make_agent(store=store, pause_on_tool_error=True, max_argument_repairs=2)
+    assert recovered.resume(result.id) == result
+    assert not next_client.contexts
+
+
+@pytest.mark.parametrize('arguments,expected', [
+    ({}, 'requirement_id'),
+    ({'requirement_id': {'PRIVATE_VALUE': 'PRIVATE_VALUE'}}, 'string'),
+    ({'requirement_id': 'R1', 'PRIVATE_FIELD': 'PRIVATE_VALUE'}, '未声明的参数'),
+])
+def test_argument_repair_feedback_does_not_echo_user_values_or_unknown_field_names(arguments, expected):
+    invalid = AssistantMessage(tool_calls=[ToolCall(id='invalid', name='read_requirement', arguments=arguments)])
+    agent, _, tool, _ = make_agent(invalid, AssistantMessage(content='请提供有效需求。'),
+                                   pause_on_tool_error=True, max_argument_repairs=1)
+    result = agent.send_message(agent.new_session().id, '读取需求')
+    feedback = next(m.content for m in result.messages if isinstance(m, ToolResult))
+    assert expected in feedback and 'PRIVATE' not in feedback
+    assert not tool.calls
+
+
+@pytest.mark.parametrize('failure', [PublicToolError('需确认需求'), ModelUnavailableError('PRIVATE')])
+def test_enabling_argument_repair_does_not_retry_actual_tool_failures(failure):
+    tool = ReadTool()
+    tool.error = failure
+    agent, _, _, client = make_agent(invocation(), Decision(should_allow=True), tool=tool,
+                                    pause_on_tool_error=True, max_argument_repairs=2)
+    result = agent.send_message(agent.new_session().id, '生成')
+    assert result.metadata['agent_turn']['status'] == 'waiting_confirmation'
+    assert len(client.contexts) == 2 and len(tool.calls) == 1
+    assert not result.metadata['agent_turn'].get('argument_repairs')
+
+
+def test_enabling_argument_repair_does_not_retry_reviewer_denial():
+    agent, _, tool, client = make_agent(invocation(), Decision(should_allow=False, reason='范围不符'),
+                                       pause_on_tool_error=True, max_argument_repairs=2)
+    result = agent.send_message(agent.new_session().id, '读取需求')
+    assert result.metadata['agent_turn']['status'] == 'waiting_confirmation'
+    assert not tool.calls and len(client.contexts) == 2
+    assert not result.metadata['agent_turn'].get('argument_repairs')
 
 
 def test_crash_between_failed_result_and_prompt_cannot_bypass_confirmation():

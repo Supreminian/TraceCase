@@ -167,6 +167,28 @@ class TestingService:
             prepared = prepare_input(text=text)
         except ValueError as exc:
             raise ServiceError(str(exc)) from None
+        return self._create_task(prepared, goal, scope, parent_task_id, owner_id,
+                                 confirmer_id, due_at, budget, resource_ids)
+
+    def create_conversation(self, content, instruction='', **options):
+        """Persist the first message and its job atomically, without a fake PRD."""
+        from sdlc.testing_agent.chat import ChatService, _text
+        from sdlc.testing_agent.worker import initialize
+        content = _text(content, 20_000)
+        instruction = _text(instruction, 20_000)
+        if not content.strip():
+            raise ServiceError('请输入消息或上传需求文档。')
+        initialize(self.db_path)
+        ChatService(self)
+        prepared = {'kind': 'conversation', 'original_text': '', 'normalized_text': '',
+                    'input_hash': hashlib.sha256(b'').hexdigest(), 'paragraphs': [],
+                    'summary': {'title': '测试协作对话', 'character_count': 0, 'preview': ''}}
+        return self._create_task(prepared, initial_message=content,
+                                 initial_instruction=instruction, **options)
+
+    def _create_task(self, prepared, goal='', scope='', parent_task_id=None, owner_id=None,
+                     confirmer_id=None, due_at=None, budget=None, resource_ids=None,
+                     initial_message=None, initial_instruction=''):
         if len(goal) > 2000 or len(scope) > 4000:
             raise ServiceError('目标最多 2,000 字符，范围最多 4,000 字符。')
         if due_at:
@@ -180,12 +202,23 @@ class TestingService:
             from sdlc.testing_agent.resources import ResourceLibrary
             resources = ResourceLibrary(self.db_path, self.token, self.workspace_id, self.project_id).snapshot(resource_ids)
         with self.connection('generate', True) as db:
-            return self._insert_task(db, prepared, goal, scope, parent_task_id, owner_id,
-                                     confirmer_id, due_at, budget, resources)
+            task_id = self._insert_task(db, prepared, goal, scope, parent_task_id, owner_id,
+                                        confirmer_id, due_at, budget, resources)
+            if initial_message is not None:
+                from sdlc.testing_agent.chat import ChatService
+                from sdlc.testing_agent.worker import _enqueue_in_db
+                if initial_instruction.strip() and initial_instruction != initial_message:
+                    chat = object.__new__(ChatService)
+                    chat.service = self
+                    chat._post_user_db(db, task_id, initial_instruction, 'initial-instruction')
+                _enqueue_in_db(self, db, task_id, 'message', initial_message,
+                               'initial-' + task_id, record_chat=True)
+            return task_id
 
     def _insert_task(self, db, prepared, goal, scope, parent_task_id, owner_id=None,
                      confirmer_id=None, due_at=None, budget=None, resources=None):
-        task_id, document_id, version = identifier(), identifier(), 1
+        conversation = prepared.get('kind') == 'conversation'
+        task_id, document_id, version = identifier(), identifier(), 0 if conversation else 1
         parent = self._task(db, parent_task_id) if parent_task_id else None
         if parent:
             document_id = parent['document_id']
@@ -211,8 +244,9 @@ class TestingService:
              document_id,document_version,input_json,input_hash,created_at,updated_at,due_at,budget_json)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (task_id, self.workspace_id, self.project_id, parent_task_id, owner_id, confirmer_id,
-             goal.strip() or '完成本次明确需求的测试准备', scope.strip() or '本次 PRD 的全部明确需求',
-             'queued', 'analysis', document_id, version, dumps(prepared), prepared['input_hash'],
+             goal.strip() or ('测试协作对话' if conversation else '完成本次明确需求的测试准备'),
+             scope.strip() or ('' if conversation else '本次 PRD 的全部明确需求'),
+             'queued', 'conversation' if conversation else 'analysis', document_id, version, dumps(prepared), prepared['input_hash'],
              now(), now(), due_at, dumps(budget or {})))
         db.execute('UPDATE testing_agent_tasks SET created_by=? WHERE id=?', (self.user['id'], task_id))
         if resources is None and parent:

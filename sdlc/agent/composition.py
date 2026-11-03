@@ -14,9 +14,11 @@ from sdlc.agent.domain import Assistant, AssistantMessage, Decision, ModelSettin
 from sdlc.testing_agent.service import TestingService
 
 
-ASSISTANT_INSTRUCTION = '''你是 TraceCase 项目测试 Agent，负责推进一个测试准备任务。
-通过聊天与用户逐步推进，不把整个流程藏在后台。先简短回应你理解的需求，再解释即将执行的具体步骤。
+ASSISTANT_INSTRUCTION = '''你是 TraceCase 项目测试 Agent，通过对话帮助用户解决测试问题。
+先理解用户本轮想做什么。只有实际需要执行测试准备时，才说明并推进相应步骤；普通交流直接回应。
 根据用户目标、当前输入和已有成果自主选择下一步：阅读、分析、规划、生成、检查或向用户提问。
+不要把用户的第一条消息自动当成PRD。问候与能力咨询直接自然回复，无须调用工具、检查是否缺PRD或提出需求收集确认。只有用户希望开始测试设计但资料不足时，才结合具体目标追问。尚无需求时可查询已有项目用例，无须为聊天或查询启动测试生成。
+所有面向用户的文字（包括工具调用前的说明）使用用户本轮使用的语言；中文消息用中文回应。
 调用list_test_cases时你要明确选择display_only：只查看用例可直接交付可分页卡片；需要进一步分析数据则继续处理。前端分页可以浏览整个查询结果，不需要你逐页重复工具调用。
 用户要查看用例时优先调用 list_test_cases 或 get_test_case，在聊天显示数据库中的真实内容；批准状态不能由草稿推断。涉及实时用例状态必须通过工具核验，历史聊天不能作为当前状态的依据；不要以导航按钮代替用户要求查看的用例正文。查询失败不代表没有批准用例，未成功查询前不得断言全部待审或数量为零。历史工具拒绝不是永久权限结论，应以当前工具和服务端校验为准。
 需要读取资料或执行工具才能回答时，在当前轮实际调用，不要只说“我将读取/处理”就结束回复，让用户再次发送继续。
@@ -154,7 +156,7 @@ class BudgetedClient:
                 'settings': model_settings.model_dump(), 'output_type': context.output_type.__name__,
                 'instruction': context.instruction,
                 'instruction_hash': hashlib.sha256(context.instruction.encode()).hexdigest(),
-                'prompt_version': 'TESTING-AGENT-CHAT-R8', 'memory': context.memory, 'agents_md': context.agents_md,
+                'prompt_version': 'TESTING-AGENT-CHAT-R9', 'memory': context.memory, 'agents_md': context.agents_md,
                 'messages': [message.model_dump(exclude={'metadata'}) for message in context.messages],
                 'public_output': getattr(self.client, 'last_public_output', None),
                 'usage': usage, 'metadata': event,
@@ -201,7 +203,7 @@ class Runtime:
                             self.service.record_event(self.task_id, {'type': 'orphaned_turn_recovered',
                                 'previous_request_id': prior_id, 'request_id': request_id,
                                 'previous_job_status': row['status'], 'old_calls_replayed': False})
-            if task['status'] == 'completed':
+            if task['status'] == 'completed' or task['input'].get('kind') == 'conversation':
                 self.agent.model_client.begin_conversation(request_id)
             if content:
                 from sdlc.testing_agent.intake import route_message
@@ -317,14 +319,31 @@ def build_runtime(db_path, token, workspace_id, project_id, task_id, *, executio
     if capability == 'regenerate':
         tools = [tool for tool in tools if tool.name in {'read_task', 'read_project_context', 'list_test_cases', 'get_test_case', 'inspect_coverage', 'propose_revision'}]
     task = service.get_task(task_id)
+    conversation = task['input'].get('kind') == 'conversation'
+    if conversation:
+        # No document has been supplied yet. Reading authorized project data and
+        # asking questions need no fabricated requirement or generation stage.
+        tools = [tool for tool in tools if tool.name in {
+            'read_task', 'read_project_context', 'read_approved_case',
+            'list_test_cases', 'get_test_case', 'ask_for_requirements'}]
     if task['status'] == 'completed':
         tools = [tool for tool in tools if tool.name in {
             'read_task', 'read_requirement_paragraphs', 'read_saved_artifact',
             'read_project_context', 'read_approved_case', 'list_test_cases', 'get_test_case'}]
+    from sdlc.testing_agent.chat import ChatService
+    # The classifier can hand off a first PRD to a new task. Keep surrounding
+    # discussion as context, explicitly separate from referenceable business facts.
+    source_chat = task['parent_task_id'] or task_id
+    recent = [{'role': m['role'], 'content': m['content'][:2000]}
+              for m in ChatService(service).list_messages(source_chat, limit=12) if m['kind'] == 'message']
     memory = json.dumps({'goal': task['goal'], 'scope': task['scope'],
+                         'has_requirements': bool(task['input']['paragraphs']),
+                         'recent_conversation_reference_only': recent,
                          'confirmed_supplements': [a['content'] for a in task['artifacts'] if a['kind'] == 'confirmed_supplement']}, ensure_ascii=False)
     policy = (Path(__file__).parent / 'AGENTS.md').read_text(encoding='utf-8')
-    assistant = Assistant(ASSISTANT_INSTRUCTION + ('\n当前任务已批准完成。可以继续解释和回答问题；禁止更改、重新生成或批准原任务。新的需求或范围调整由系统建立关联任务，原批准记录保留。' if task['status'] == 'completed' else ''), tools, memory, policy)
+    assistant = Assistant(ASSISTANT_INSTRUCTION
+        + ('\n当前是尚未收到需求的对话。请直接回应用户的真实意图；无须分析问候或要求用户确认生成计划。追问内容由你根据实际消息决定。' if conversation else '')
+        + ('\n当前任务已批准完成。可以继续解释和回答问题；禁止更改、重新生成或批准原任务。新的需求或范围调整由系统建立关联任务，原批准记录保留。' if task['status'] == 'completed' else ''), tools, memory, policy)
     review_role = ToolCallReviewer(REVIEWER_INSTRUCTION, memory, policy)
 
     def query_review(session, call):
@@ -348,7 +367,8 @@ def build_runtime(db_path, token, workspace_id, project_id, task_id, *, executio
                          max_iterations=int(os.environ.get('SDLC_AGENT_MAX_ITERATIONS', '20')),
                          max_tool_calls=int(os.environ.get('SDLC_AGENT_MAX_TOOL_CALLS', '32')),
                          max_duration_seconds=int(os.environ.get('SDLC_AGENT_MAX_SECONDS', '900')),
-                         authorize=authorize, pause_on_tool_error=True, tool_review_policy=query_review)
+                         authorize=authorize, pause_on_tool_error=True, tool_review_policy=query_review,
+                         max_argument_repairs=2)
     return Runtime(service, task_id, agent, guard, public_event_sink)
 
 
