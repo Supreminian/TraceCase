@@ -18,7 +18,8 @@ CSS = '''<style>
 .st-key-agent_chat_workspace {height:calc(100dvh - 212px)!important;flex:0 0 auto!important;min-height:0}
 .st-key-agent_chat_workspace > div:has(> .st-key-agent_chat_shell) {flex:1 1 0!important;min-height:0;height:auto!important}
 .st-key-agent_chat_workspace .st-key-agent_chat_shell {min-height:0;overflow:hidden}
-.st-key-agent_chat_shell > div:has([class*="st-key-chat_history_"]) {flex:1 1 0!important;min-height:0;overflow:hidden}
+.st-key-agent_chat_shell > div:has([class*="st-key-chat_history_"]),
+.st-key-agent_chat_shell > div:has(.st-key-chat_welcome) {flex:1 1 0!important;min-height:0;overflow:hidden}
 .tc-chat-heading {display:flex;align-items:center;gap:14px;margin:0 0 4px}
 .tc-chat-logo {width:44px;height:44px;display:grid;place-items:center;border-radius:15px;background:#243454;color:#fff;font-size:23px;box-shadow:0 7px 22px #24345418}
 .tc-chat-heading h1 {font-size:27px!important;margin:0!important;padding:0!important;line-height:1.35!important}
@@ -38,7 +39,8 @@ CSS = '''<style>
 .st-key-agent_chat_shell div:has(> [class*="st-key-chat_history_"]) {height:auto!important;flex:1 1 0!important;min-height:0}
 .st-key-agent_chat_shell [class*="st-key-chat_history_"] {min-height:0;overscroll-behavior:contain}
 .st-key-agent_chat_shell div:has(> .st-key-chat_welcome) {height:auto!important;flex:1 1 0!important;min-height:0}
-.st-key-chat_welcome {min-height:0}
+.st-key-chat_welcome {min-height:0;gap:0!important;overflow-y:auto!important}
+.st-key-chat_welcome [data-testid="stElementContainer"]:has(.tc-chat-welcome) {margin-block:auto;flex-shrink:0;width:100%}
 @media(min-width:1000px){.st-key-agent_chat_shell{width:calc(100% + 64px)!important;max-width:none!important;margin-inline:-32px;padding-inline:24px}}
 .tc-chat-state {font-size:12px;color:#778398;padding:8px 2px;border-bottom:1px solid #edf0f5;display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
 .tc-chat-source {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 120px;color:#8b95a6}
