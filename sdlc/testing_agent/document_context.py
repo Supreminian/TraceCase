@@ -89,6 +89,13 @@ def section_context(paragraphs):
     return result
 
 
+def model_paragraphs(paragraphs):
+    """Keep complete evidence without repeating storage hashes and heading titles."""
+    return [{**{key: paragraph[key] for key in ('id', 'text', 'start_line', 'end_line')},
+             'heading_ids': [heading['paragraph_id'] for heading in paragraph['heading_hierarchy']]}
+            for paragraph in section_context(paragraphs)]
+
+
 def _validated(value, paragraph_ids):
     try:
         result = DocumentContext.model_validate(
@@ -127,7 +134,7 @@ def build_document_context(service, task_id, model_client, settings):
                 'summary': {key: value for key, value in document['summary'].items()
                             if key != 'preview'},
                 'input_hash': document['input_hash'],
-                'paragraphs': section_context(paragraphs),
+                'paragraphs': model_paragraphs(paragraphs),
             },
         }))],
     )

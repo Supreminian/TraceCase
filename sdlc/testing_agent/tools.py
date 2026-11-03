@@ -103,9 +103,11 @@ def build_tools(service, task_id, model_client, settings):
                 'generation_instruction': '生成时必须直接使用coverage_plan中保存的模块名称和条件ID，不能猜测或另编编号。'}
 
     def stage_task():
+        from sdlc.testing_agent.document_context import model_paragraphs
         view = read_task()
         source = service.get_task(task_id)['input']
-        view['input'] = {'summary': source['summary'], 'input_hash': source['input_hash'], 'paragraphs': source['paragraphs']}
+        view['input'] = {'summary': {k: v for k, v in source['summary'].items() if k != 'preview'},
+                         'input_hash': source['input_hash'], 'paragraphs': model_paragraphs(source['paragraphs'])}
         view.pop('analysis', None)
         view.pop('coverage_plan', None)
         return view
@@ -186,11 +188,9 @@ def build_tools(service, task_id, model_client, settings):
         ensure_retry_confirmation()
         payload = {'task': stage_task(), 'confirmed_supplement': service.artifact(task_id, 'confirmed_supplement')}
         if service.artifact(task_id, 'interaction_policy', 'chat-v1'):
-            from sdlc.testing_agent.document_context import build_document_context, section_context
+            from sdlc.testing_agent.document_context import build_document_context
             context = build_document_context(service, task_id, model_client, settings)
             payload['document_context'] = context.model_dump()
-            payload['task']['input'] = {'summary': task['input']['summary'], 'input_hash': task['input_hash'],
-                                        'paragraphs': section_context(task['input']['paragraphs'])}
         if task['parent_task_id']:
             payload['previous_analysis'] = service.artifact(task['parent_task_id'], 'analysis')
         content = typed_call('提取功能、角色、原子业务规则、风险和问题。已存在的规则ID在含义不变时保留。'

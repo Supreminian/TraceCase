@@ -186,6 +186,23 @@ class AuditService:
         self.artifacts.append(args)
 
 
+def test_token_reservation_reports_exact_reason_before_call_or_time_limit():
+    from sdlc.agent.application import UserInputRequired
+    service = AuditService()
+    for index in range(15):
+        service.record_event('task', {'type': 'model_call',
+            'usage': {'total_tokens': 199381 if index == 14 else 0}})
+    client = ScriptedClient()
+    budget = BudgetedClient(client, service, 'task', lambda: None)
+    context = SimpleNamespace(output_type=AssistantMessage, messages=[], instruction='', memory='', agents_md='')
+    with pytest.raises(UserInputRequired) as stopped:
+        budget.generate(context, ModelSettings(model_id='reviewer', max_tokens=1024))
+    assert stopped.value.kind == 'budget_exhausted'
+    assert all(value in str(stopped.value) for value in ('199,381', '1,024', '200,000'))
+    assert '时间' not in str(stopped.value) and '次模型调用' not in str(stopped.value)
+    assert not client.contexts
+
+
 def test_stream_and_nonstream_share_budget_guard_and_model_attempt_audit():
     client = StreamingClient(AssistantMessage(content='公开答复'), Decision(should_allow=True))
     client.last_usage = {'total_tokens': 7}

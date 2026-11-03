@@ -88,10 +88,17 @@ class BudgetedClient:
         self.guard()
         from sdlc.testing_agent.context_projection import project_context
         context = project_context(context)
-        if self.calls >= self.max_calls or self.tokens + model_settings.max_tokens > self.max_tokens or time.monotonic() - self.started > self.max_seconds:
-            raise UserInputRequired('本轮处理已达到调用、Token 或时长预算上限，继续重试原任务也无法推进。'
-                '已有需求、成果和审核历史均已保留。你可以确认创建关联的新一轮继续，或调整目标后再开始。',
-                kind='budget_exhausted')
+        limit = None
+        if self.calls >= self.max_calls:
+            limit = f'本轮已使用 {self.calls:,} 次模型调用，达到 {self.max_calls:,} 次的任务预算上限。'
+        elif self.tokens + model_settings.max_tokens > self.max_tokens:
+            limit = (f'本轮已累计使用 {self.tokens:,} Token；下一次调用需预留最多 {model_settings.max_tokens:,} Token，'
+                     f'超过 {self.max_tokens:,} Token 的任务预算上限。')
+        elif time.monotonic() - self.started > self.max_seconds:
+            limit = f'本轮处理时间已超过 {self.max_seconds:,} 秒的任务预算上限。'
+        if limit:
+            raise UserInputRequired(limit + '\n\n已生成的用例和审核记录均已保留。可以创建关联的新一轮继续处理剩余内容。',
+                                    kind='budget_exhausted')
         self.calls += 1
         if self.throttle:
             default_interval = '5' if model_settings.provider == 'google' else '0'

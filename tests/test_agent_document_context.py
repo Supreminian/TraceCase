@@ -119,7 +119,8 @@ def test_model_receives_complete_document_and_heading_context_as_untrusted_user_
     assert payload['document']['summary']['title'] == source['summary']['title']
     assert 'preview' not in payload['document']['summary']
     assert [p['text'] for p in payload['document']['paragraphs']] == [p['text'] for p in source['paragraphs']]
-    assert payload['document']['paragraphs'][-1]['heading_hierarchy'][-1]['title'] == '演示PRD与歧义处理标准'
+    heading_id = payload['document']['paragraphs'][-1]['heading_ids'][-1]
+    assert next(p['text'] for p in payload['document']['paragraphs'] if p['id'] == heading_id) == '## 演示PRD与歧义处理标准'
     assert len(payload['document']['paragraphs']) == len(source['paragraphs'])
     assert PLATFORM_PRD not in ctx.instruction
     assert '不要用' in ctx.instruction and '上下文' in ctx.instruction
@@ -225,4 +226,6 @@ def test_model_payload_contains_one_complete_paragraph_copy_with_all_source_refe
     encoded = json.dumps(payload, ensure_ascii=False)
     for paragraph in source['paragraphs']:
         assert encoded.count(json.dumps(paragraph['text'], ensure_ascii=False)) == 1
-    assert document['paragraphs'][-1]['heading_hierarchy'][-1]['paragraph_id'] == source['paragraphs'][2]['id']
+    assert document['paragraphs'][-1]['heading_ids'][-1] == source['paragraphs'][2]['id']
+    assert all('stable_id' not in p and 'content_hash' not in p and 'heading_hierarchy' not in p
+               for p in document['paragraphs'])

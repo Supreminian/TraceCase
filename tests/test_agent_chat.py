@@ -331,6 +331,14 @@ def test_spent_legacy_budget_has_new_round_action_instead_of_dead_end_retry(cont
     assert any(a['kind'] == 'handoff' and a['content']['child_task_id'] == child['id'] for a in parent['artifacts'])
 
 
+def test_budget_confirmation_emits_one_explanation_without_duplicate_reason(context):
+    _, chat, task = context
+    pending = chat.request_confirmation(task, kind='budget_exhausted',
+        prompt='已使用 199,381 Token，下一次预留 1,024 Token 将超过 200,000 Token 预算。请确认新一轮。')
+    messages = [message for message in chat.list_messages(task) if message['kind'] == 'confirmation']
+    assert len(messages) == 1 and messages[0]['content'] == pending['prompt']
+
+
 def test_budget_exhausted_natural_message_gets_visible_reply_without_extra_provider_call(context, monkeypatch):
     from sdlc.agent.composition import build_runtime
     from tests.test_agent_composition import ScriptedClient

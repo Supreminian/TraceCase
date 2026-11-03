@@ -1,6 +1,7 @@
 """Conversation-first testing workbench with public, live model output."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import html
 import json
 import re
@@ -14,17 +15,33 @@ from sdlc.testing_agent import worker
 
 
 CSS = '''<style>
+.st-key-agent_chat_workspace {height:calc(100dvh - 212px)!important;flex:0 0 auto!important;min-height:0}
+.st-key-agent_chat_workspace > div:has(> .st-key-agent_chat_shell) {flex:1 1 0!important;min-height:0;height:auto!important}
+.st-key-agent_chat_workspace .st-key-agent_chat_shell {min-height:0;overflow:hidden}
+.st-key-agent_chat_shell > div:has([class*="st-key-chat_history_"]) {flex:1 1 0!important;min-height:0;overflow:hidden}
 .tc-chat-heading {display:flex;align-items:center;gap:14px;margin:0 0 4px}
 .tc-chat-logo {width:44px;height:44px;display:grid;place-items:center;border-radius:15px;background:#243454;color:#fff;font-size:23px;box-shadow:0 7px 22px #24345418}
 .tc-chat-heading h1 {font-size:27px!important;margin:0!important;padding:0!important;line-height:1.35!important}
 .tc-chat-heading p {color:#778398;margin:4px 0 0;font-size:13px}
 .st-key-agent_chat_shell {background:#fff;border:1px solid #e2e7ef;border-radius:20px;padding:10px 20px 18px;box-shadow:0 12px 40px #26365005}
-.st-key-agent_chat_shell [data-testid="stChatMessage"] {border-radius:15px;padding:14px 16px;margin-bottom:6px;background:#f5f7fb}
-.st-key-agent_chat_shell [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {background:#eef3ff}
+.st-key-agent_chat_shell [data-testid="stChatMessage"] {border-radius:6px 18px 18px 18px;padding:16px 18px;margin:4px 0 12px;background:#f5f7fb;max-width:92%;border:1px solid #e7ebf2;align-self:flex-start}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--user) {width:fit-content!important;max-width:80%;margin-left:auto;align-self:flex-end;flex-direction:row-reverse;border:1px solid #d6e1fb;border-radius:18px 6px 18px 18px;background:#edf3ff}
+.st-key-agent_chat_shell [data-testid="stChatMessageContent"] {min-width:0;overflow-wrap:anywhere}
+.st-key-agent_chat_shell [data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] {gap:6px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--user) [data-testid="stChatMessageContent"] {flex:1}
+.tc-message-identity {display:flex;align-items:center;gap:7px;margin:0 0 4px;font-size:12px;font-weight:700;color:#5263a5;letter-spacing:.02em}
+.tc-message--user {justify-content:flex-end;color:#365eab}
+.tc-agent-indicator {width:6px;height:6px;border-radius:50%;background:#6879d3;box-shadow:0 0 0 3px #e5e9ff}
+.st-key-agent_chat_shell [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {overflow-wrap:anywhere}
 .st-key-agent_chat_shell [data-testid="stChatMessage"] p {line-height:1.75;font-size:14px}
 .st-key-agent_chat_shell [data-testid="stChatInput"] {border:1px solid #cfd8e8;border-radius:15px;background:#f8faff;box-shadow:0 3px 12px #26365006}
-.st-key-agent_chat_shell div:has(> [class*="st-key-chat_history_"]) {height:clamp(220px,calc(100dvh - 500px),520px)!important;flex:0 0 clamp(220px,calc(100dvh - 500px),520px)!important}
-.tc-chat-state {font-size:12px;color:#778398;padding:10px 2px;border-bottom:1px solid #edf0f5;margin-bottom:12px;display:flex;gap:8px;align-items:center}
+.st-key-agent_chat_shell div:has(> [class*="st-key-chat_history_"]) {height:auto!important;flex:1 1 0!important;min-height:0}
+.st-key-agent_chat_shell [class*="st-key-chat_history_"] {min-height:0;overscroll-behavior:contain}
+.st-key-agent_chat_shell div:has(> .st-key-chat_welcome) {height:auto!important;flex:1 1 0!important;min-height:0}
+.st-key-chat_welcome {min-height:0}
+@media(min-width:1000px){.st-key-agent_chat_shell{width:calc(100% + 64px)!important;max-width:none!important;margin-inline:-32px;padding-inline:24px}}
+.tc-chat-state {font-size:12px;color:#778398;padding:8px 2px;border-bottom:1px solid #edf0f5;display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
+.tc-chat-source {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 120px;color:#8b95a6}
 .tc-state-dot {width:7px;height:7px;border-radius:100%;background:#64748b;display:inline-block}
 .tc-state-dot.active {background:#5b6bec;animation:tc-breathe 1.6s infinite}
 .tc-thinking {display:flex;align-items:center;gap:11px;padding:12px 16px;border:1px solid #e5e9f5;border-radius:14px;background:linear-gradient(110deg,#f2f4ff,#fafbff,#f2f8fa);background-size:200% 100%;animation:tc-shimmer 3s linear infinite;margin:8px 0}
@@ -42,7 +59,7 @@ CSS = '''<style>
 @keyframes tc-breathe {0%,100%{opacity:.45;transform:scale(.94)}50%{opacity:1;transform:scale(1.05)}}
 @keyframes tc-shimmer {0%{background-position:200% 0}100%{background-position:-200% 0}}
 @media(prefers-reduced-motion:reduce){.tc-thinking,.tc-thinking-orb,.tc-thinking-dots span,.tc-state-dot.active{animation:none!important}}
-@media(max-width:700px){.st-key-agent_chat_shell{padding:7px 9px}.tc-chat-heading h1{font-size:23px!important}}
+@media(max-width:700px){.st-key-agent_chat_workspace{height:calc(100dvh - 250px)!important}.st-key-agent_chat_shell{padding:7px 9px}.tc-chat-heading h1{font-size:23px!important}.st-key-agent_chat_shell [data-testid="stChatMessage"]{max-width:98%;padding:12px 10px}.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--user){max-width:90%}}
 </style>'''
 
 LABELS = {'queued': '已收到，准备开始', 'running': 'Agent 正在处理', 'waiting_confirmation': '等待你的确认',
@@ -50,6 +67,17 @@ LABELS = {'queued': '已收到，准备开始', 'running': 'Agent 正在处理',
           'completed': '测试设计已交付', 'failed': '需要确认下一步', 'cancelled': '本轮已取消'}
 STAGES = {'analysis': '正在理解需求与角色', 'planning': '正在整理覆盖计划', 'generation': '正在编写测试用例',
           'review': '正在复核结果与需求依据', 'delivery': '正在整理交付内容'}
+
+
+@contextmanager
+def _message(role):
+    """Keep explicit speaker identities on streamed and interactive messages."""
+    user = role == 'user'
+    with st.chat_message(role, avatar=':material/person:' if user else ':material/auto_awesome:'):
+        st.markdown('<div class="tc-message-identity ' + ('tc-message--user' if user else 'tc-message--agent') + '">'
+            + ('你' if user else '<span class="tc-agent-indicator" aria-hidden="true"></span>TraceCase Agent')
+            + '</div>', unsafe_allow_html=True)
+        yield
 
 
 def _jobs(service, task_id):
@@ -100,7 +128,7 @@ def _confirmation(service, chat, task_id, pending, active=False):
     kind = pending['kind']
     plan = kind == 'generation_plan'
     needs_document = kind == 'requirements_input'
-    with st.chat_message('assistant', avatar=':material/auto_awesome:'):
+    with _message('assistant'):
         st.markdown('<div class="tc-confirm-tag">下一步由你决定</div>', unsafe_allow_html=True)
         if plan:
             details = service.artifact(task_id, 'coverage_plan') or {}
@@ -151,7 +179,7 @@ def _questions_in_chat(service, chat, task, active, historical=False):
                 if question.get('answer'):
                     st.text('已保存答复：' + question['answer']['text'])
         return
-    with st.chat_message('assistant', avatar=':material/auto_awesome:'):
+    with _message('assistant'):
         st.markdown('**这些需求还需要你补充**')
         for question in questions:
             q = question['content']
@@ -200,6 +228,8 @@ def live_conversation(service, chat, task_id):
     active = any(j['status'] in {'queued', 'running'} for j in jobs)
     pending = chat.recover_waiting_confirmation(task_id)
     messages = chat.list_messages(task_id)
+    pending_message_id = next((message['id'] for message in reversed(messages)
+                               if message['kind'] == 'confirmation'), None)
     live_key = '_chat_live_state_' + task_id
     previous = st.session_state.get(live_key)
     current = (task['status'], task['run_id'], bool(pending), active)
@@ -208,13 +238,15 @@ def live_conversation(service, chat, task_id):
     if previous is not None and previous != current and not active:
         st.rerun(scope='app')
     status = LABELS.get(task['status'], '继续当前对话')
-    st.markdown('<div class="tc-chat-state"><span class="tc-state-dot ' + ('active' if active else '') + '"></span>'
-                + html.escape(status) + '<span>·</span>需求版本 ' + str(task['document_version']) + '</div>', unsafe_allow_html=True)
     document_context = service.artifact(task_id, 'document_context')
-    st.caption('本轮需求：' + (document_context['target_product'] if document_context else task['input']['summary']['title']))
+    title = document_context['target_product'] if document_context else task['input']['summary']['title']
+    st.markdown('<div class="tc-chat-state"><span class="tc-state-dot ' + ('active' if active else '') + '"></span>'
+                + html.escape(status) + '<span>·</span>需求版本 ' + str(task['document_version'])
+                + '<span class="tc-chat-source" title="' + html.escape(title, quote=True) + '">本轮需求：'
+                + html.escape(title) + '</span></div>', unsafe_allow_html=True)
     with st.container(height=360, border=False, autoscroll=True, key='chat_history_' + task_id):
         if not messages:
-            with st.chat_message('assistant', avatar=':material/auto_awesome:'):
+            with _message('assistant'):
                 st.markdown('我会在这里和你推进测试准备。你可以补充目标、查看需求依据，或审核已有用例。')
                 if task['run_id']:
                     st.caption('这是一项已有任务，已保存成果和审核记录可以继续使用。')
@@ -224,9 +256,11 @@ def live_conversation(service, chat, task_id):
                 progress.append(message['content'])
                 continue
             content = message['content']
+            if pending and pending['kind'] == 'budget_exhausted' and message['id'] == pending_message_id:
+                content = pending['prompt']
             if not content.strip():
                 continue
-            with st.chat_message(message['role'], avatar=':material/auto_awesome:' if message['role'] == 'assistant' else None):
+            with _message(message['role']):
                 if message['role'] == 'user' and len(content) > 1600:
                     st.markdown(content[:600] + '\n\n…')
                     with st.expander('查看本次提交的完整内容'):
@@ -247,7 +281,7 @@ def live_conversation(service, chat, task_id):
             _questions_in_chat(service, chat, task, active,
                 historical=bool(pending and pending['kind'] == 'budget_exhausted'))
         if task['run_id'] and not active and not pending:
-            with st.chat_message('assistant', avatar=':material/auto_awesome:'):
+            with _message('assistant'):
                 with service.connection() as db:
                     cases = service.legacy._cases(db, task['run_id'])
                 approved = sum(c['status'] == 'approved' for c in cases)
@@ -261,7 +295,7 @@ def live_conversation(service, chat, task_id):
 
 def _new_conversation(service, options):
     with st.container(border=True, key='agent_chat_shell'):
-        with st.container(height=230, border=False):
+        with st.container(height=230, border=False, key='chat_welcome'):
             st.markdown('<div class="tc-chat-welcome"><span style="font-size:34px;color:#5263ce">✦</span>'
                 '<strong>从一个测试目标开始</strong><p>告诉我你要验证什么，粘贴需求或附上 Markdown 文档。'
                 '我会结合你的需求推进测试设计，遇到不明确的地方再与你讨论。</p>'
@@ -301,10 +335,18 @@ def _details(service, task):
 
 
 def workspace(legacy):
-    from sdlc.testing_agent.ui import testing_service, resources_view
+    from sdlc.testing_agent.ui import testing_service
     service = testing_service(legacy)
     chat = ChatService(service)
     st.html(CSS)
+    with st.container(key='agent_chat_workspace'):
+        selected = _workspace_contents(legacy, service, chat)
+    if selected:
+        _details(service, service.get_task(selected))
+
+
+def _workspace_contents(legacy, service, chat):
+    from sdlc.testing_agent.ui import resources_view
     st.markdown('<div class="tc-chat-heading"><div class="tc-chat-logo">✦</div><div><h1>测试协作对话</h1>'
                 '<p>需求、计划、用例与反馈，在同一个对话中逐步完成。</p></div></div>', unsafe_allow_html=True)
     if '_agent_notice' in st.session_state:
@@ -353,7 +395,7 @@ def workspace(legacy):
     labels = {task['id']: task['goal'][:45] + f" · 需求 {task['document_version']} · {task['id'][:8]}" for task in tasks}
     left, right, setting_column = st.columns([4, 1, 1])
     selected = left.selectbox('当前对话', ids, key=key, label_visibility='collapsed',
-        format_func=lambda tid: '新对话' if tid is None else labels.get(tid, str(tid)))
+        placeholder='新对话', format_func=lambda tid: '新对话' if tid is None else labels.get(tid, str(tid)))
     if selected not in ids:
         # A stale browser widget can be deserialized during selectbox creation,
         # after the pre-render check above. Keep handling this submitted chat turn
@@ -411,9 +453,9 @@ def workspace(legacy):
             followup = _safe_action(send)
             if followup:
                 _select_next(service, followup)
-    _details(service, service.get_task(selected))
     if active and 'generate' in permissions:
         if st.button('停止本轮处理', key='chat_cancel_' + selected):
             worker.cancel_work(service, selected)
             service.cancel_task(selected)
             st.rerun()
+    return selected

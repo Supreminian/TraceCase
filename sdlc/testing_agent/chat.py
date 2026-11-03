@@ -58,7 +58,7 @@ PLAN_REASON = '需求分析与测试覆盖方案已准备好，生成用例前�
 PLAN_PROMPT = '请确认按当前目标与范围生成用例，或补充说明调整方案；也可以暂不继续。'
 REQUIREMENTS_REASON = '我还需要一些需求资料，才能设计有依据的测试用例。'
 REQUIREMENTS_PROMPT = '请补充 PRD 或说明需要测试的功能、角色与业务规则；也可以暂不继续。'
-BUDGET_REASON = '本轮处理已达到调用、Token 或时长预算上限，重试原任务无法继续推进；已有成果均已保留。'
+BUDGET_REASON = '本轮模型处理已暂停，已有成果均已保留。'
 BUDGET_PROMPT = '可以确认创建关联的新一轮，基于当前需求继续处理；原任务的预算、生成结果和审核历史会保留。也可以先调整目标或暂停。'
 
 def _failure_reason(reason=None, error_code=None):
@@ -251,7 +251,7 @@ class ChatService:
                 prefix = hashlib.sha256(str(request_key or 'public').encode()).hexdigest()[:24]
                 event_key = prefix + ':assistant:' + hashlib.sha256(str(public_message_id).encode()).hexdigest()[:48]
                 message = db.execute("SELECT id FROM testing_agent_chat_messages WHERE task_id=? AND actor_id='agent' AND request_key=?", (task_id, event_key)).fetchone()
-            public_content = safe_reason + '\n\n' + safe_prompt
+            public_content = safe_prompt if kind == 'budget_exhausted' else safe_reason + '\n\n' + safe_prompt
             public_state = 'completed' if normal_wait else 'error'
             if message:
                 db.execute("UPDATE testing_agent_chat_messages SET kind='confirmation',content=?,state=?,updated_at=? WHERE id=?", (public_content, public_state, timestamp, message['id']))
