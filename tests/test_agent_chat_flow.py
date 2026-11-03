@@ -357,7 +357,8 @@ def test_completed_task_accepts_streamed_chat_without_reopening_approval(convers
     assert client.streams
     with pytest.raises(ValueError, match='取消或完成'):
         service.add_artifact(task_id, 'case_batch', {'cases': []}, 'cannot-change-approved')
-    assert all(tool.name.startswith('read_') for tool in client.contexts[-1].tools)
+    assert all(tool.name.startswith('read_') or tool.name in {'list_test_cases', 'get_test_case'}
+               for tool in client.contexts[-1].tools)
     with pytest.raises(ValueError, match='取消或完成'):
         worker.enqueue(service, task_id, 'start', request_key='cannot-rerun-approved')
 
@@ -376,3 +377,22 @@ def test_completed_task_new_requirements_create_child_preserving_parent(conversa
     assert child['status'] == 'queued'
     assert '新增规则：标题最多20字。' in child['input']['original_text']
     assert '新增规则：标题最多20字。' not in parent['input']['original_text']
+
+
+def test_case_cards_survive_failure_after_successful_query(conversation):
+    service, chat, task_id = conversation
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='query-before-failure')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='我来查询当前项目的批准用例。', tool_calls=[
+            ToolCall(id='query-approved', name='list_test_cases', arguments={'status': 'approved'})]),
+        Decision(should_allow=True, reason='读取当前项目'), RuntimeError('provider unavailable'))
+    # The business result is durable before the next model turn fails.
+    owner = 'query-worker'
+    job = worker.claim(service.db_path, owner)
+    worker.execute(service.db_path, job, owner, runtime_factory=lambda path, token, workspace, project, task, **options:
+        build_runtime(path, token, workspace, project, task, model_client=client, **options))
+    messages = chat.list_messages(task_id)
+    card = next(m for m in messages if m['kind'] == 'case_collection')
+    assert card['state'] == 'completed'
+    assert json.loads(card['content'])['query']['status'] == 'approved'
+    assert not client.outputs

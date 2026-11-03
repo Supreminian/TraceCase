@@ -326,7 +326,8 @@ def test_reviewer_message_runs_only_revision_tools_without_generation_permission
         return app
 
     worker.execute(service.db_path, job, "revision-worker", runtime_factory=factory)
-    assert set(seen_tools) == {"read_task", "read_project_context", "inspect_coverage", "propose_revision"}
+    assert set(seen_tools) == {"read_task", "read_project_context", "inspect_coverage", "propose_revision",
+                               "list_test_cases", "get_test_case"}
     assert worker.list_work(reviewer, task_id)[0]["status"] == "completed"
     current = reviewer.get_task(task_id)
     revision = next(item for item in current["proposals"] if item["kind"] == "case_revision")

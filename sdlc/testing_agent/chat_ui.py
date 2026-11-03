@@ -57,6 +57,7 @@ CSS = '''<style>
 .st-key-chat_welcome {min-height:0;gap:0!important;overflow-y:auto!important}
 .st-key-chat_welcome [data-testid="stElementContainer"]:has(.tc-chat-welcome) {margin-block:auto;flex-shrink:0;width:100%}
 @media(min-width:1000px){.st-key-agent_chat_shell{width:calc(100% + 64px)!important;max-width:none!important;margin-inline:-32px;padding-inline:24px}}
+.st-key-agent_chat_shell [class*="st-key-case_card_"] {background:#fff;border-radius:12px;padding:16px;margin-block:8px}
 /* The active composer swaps the send affordance for a real cancel action. */
 .st-key-chat_composer {position:relative;flex-shrink:0}
 .st-key-chat_composer:has(.st-key-chat_stop_generation) [data-testid="stChatInputSubmitButton"] {visibility:hidden;pointer-events:none}
@@ -284,6 +285,11 @@ def live_conversation(service, chat, task_id):
             if message['kind'] == 'progress':
                 progress.append(message['content'])
                 continue
+            if message['kind'] == 'case_collection':
+                from sdlc.testing_agent.case_cards import render_collection
+                with _message('assistant'):
+                    render_collection(service, message, active)
+                continue
             content = message['content']
             if pending and pending['kind'] == 'budget_exhausted' and message['id'] == pending_message_id:
                 content = pending['prompt']
@@ -309,7 +315,7 @@ def live_conversation(service, chat, task_id):
         if task['status'] not in {'completed', 'cancelled'}:
             _questions_in_chat(service, chat, task, active,
                 historical=bool(pending and pending['kind'] == 'budget_exhausted'))
-        if task['run_id'] and not active and not pending:
+        if task['run_id'] and not active and not pending and not any(m['kind'] == 'case_collection' for m in messages):
             with _message('assistant'):
                 with service.connection() as db:
                     cases = service.legacy._cases(db, task['run_id'])

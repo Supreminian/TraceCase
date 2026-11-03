@@ -37,6 +37,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS testing_agent_chat_confirmation_request ON tes
 '''
 
 TOOLS = {
+    'list_test_cases': '正在查询真实用例与审批状态',
+    'get_test_case': '正在读取用例详情与需求依据',
     'read_task': '正在读取当前任务和已保存成果',
     'read_project_context': '正在整理项目背景与共享资料',
     'analyze_requirements': '正在分析需求、角色和待澄清事项',

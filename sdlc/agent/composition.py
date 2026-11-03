@@ -17,6 +17,7 @@ from sdlc.testing_agent.service import TestingService
 ASSISTANT_INSTRUCTION = '''你是 TraceCase 项目测试 Agent，负责推进一个测试准备任务。
 通过聊天与用户逐步推进，不把整个流程藏在后台。先简短回应你理解的需求，再解释即将执行的具体步骤。
 根据用户目标、当前输入和已有成果自主选择下一步：阅读、分析、规划、生成、检查或向用户提问。
+用户要查看用例时优先调用 list_test_cases 或 get_test_case，在聊天显示数据库中的真实内容；批准状态不能由草稿推断。
 需要读取资料或执行工具才能回答时，在当前轮实际调用，不要只说“我将读取/处理”就结束回复，让用户再次发送继续。
 纯讨论也应基于已提供材料直接给出有内容的答复；缺少资料则提出具体问题。只有确实等待用户回答时才交还对话。
 输入明确且操作已授权时可以直接推进；目标、资料或范围不足时，使用 ask_for_requirements 或 request_user_confirmation 提出具体问题。
@@ -134,7 +135,7 @@ class BudgetedClient:
                 'settings': model_settings.model_dump(), 'output_type': context.output_type.__name__,
                 'instruction': context.instruction,
                 'instruction_hash': hashlib.sha256(context.instruction.encode()).hexdigest(),
-                'prompt_version': 'TESTING-AGENT-CHAT-R3', 'memory': context.memory, 'agents_md': context.agents_md,
+                'prompt_version': 'TESTING-AGENT-CHAT-R4', 'memory': context.memory, 'agents_md': context.agents_md,
                 'messages': [message.model_dump(exclude={'metadata'}) for message in context.messages],
                 'public_output': getattr(self.client, 'last_public_output', None),
                 'usage': usage, 'metadata': event,
@@ -278,12 +279,12 @@ def build_runtime(db_path, token, workspace_id, project_id, task_id, *, executio
     primary, reviewer = settings('assistant'), settings('reviewer')
     tools = build_tools(service, task_id, client, primary)
     if capability == 'regenerate':
-        tools = [tool for tool in tools if tool.name in {'read_task', 'read_project_context', 'inspect_coverage', 'propose_revision'}]
+        tools = [tool for tool in tools if tool.name in {'read_task', 'read_project_context', 'list_test_cases', 'get_test_case', 'inspect_coverage', 'propose_revision'}]
     task = service.get_task(task_id)
     if task['status'] == 'completed':
         tools = [tool for tool in tools if tool.name in {
             'read_task', 'read_requirement_paragraphs', 'read_saved_artifact',
-            'read_project_context', 'read_approved_case'}]
+            'read_project_context', 'read_approved_case', 'list_test_cases', 'get_test_case'}]
     memory = json.dumps({'goal': task['goal'], 'scope': task['scope'],
                          'confirmed_supplements': [a['content'] for a in task['artifacts'] if a['kind'] == 'confirmed_supplement']}, ensure_ascii=False)
     policy = (Path(__file__).parent / 'AGENTS.md').read_text(encoding='utf-8')
