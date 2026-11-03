@@ -37,7 +37,7 @@ CSS = '''<style>
 .st-key-agent_chat_shell [data-testid="stChatMessage"] p {line-height:1.75;font-size:14px}
 /* Readable rich text spacing, scoped to Agent replies only. */
 .st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) {padding:20px 22px}
-.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] {gap:12px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] {gap:18px!important}
 .st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) [data-testid="stMarkdownContainer"] {line-height:1.85;font-size:14px}
 .st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) :is(p,li) {line-height:1.85}
 .st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-message--agent) p {margin:0 0 14px}
@@ -70,7 +70,10 @@ CSS = '''<style>
 .tc-chat-welcome strong {display:block;font-size:20px;color:#2d3b55;margin:14px 0 8px}
 .tc-chat-welcome p {font-size:14px;line-height:1.8;max-width:480px;margin:auto}
 .tc-chat-tag {display:inline-block;padding:4px 10px;margin:14px 3px 0;background:#f0f3f9;border:1px solid #e5eaf1;border-radius:20px;font-size:12px;color:#64748b}
-.tc-confirm-tag {font-size:11px;color:#6b61ae;letter-spacing:.06em;margin:3px 0 7px}
+.tc-confirm-tag {font-size:12px;color:#6b61ae;letter-spacing:.06em;margin:0;padding:8px 0;line-height:1.7}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-confirm-tag) {padding-block:24px}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-confirm-tag) [data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] {gap:20px!important}
+.st-key-agent_chat_shell [data-testid="stChatMessage"]:has(.tc-confirm-tag) [data-testid="stCaptionContainer"] {padding-top:8px;line-height:1.8}
 .tc-chat-footnote {color:#94a0b3;font-size:11px;margin-top:7px}
 @keyframes tc-hop {0%,70%,100%{transform:translateY(0);opacity:.4}35%{transform:translateY(-4px);opacity:1}}
 @keyframes tc-breathe {0%,100%{opacity:.45;transform:scale(.94)}50%{opacity:1;transform:scale(1.05)}}
