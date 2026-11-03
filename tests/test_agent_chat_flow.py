@@ -407,6 +407,7 @@ def test_approved_project_query_uses_authorization_not_model_review(conversation
         service.legacy.review(run, case['case_id'], case['version'], case['revision'],
                               'approve', '', '符合需求', 'approved-query-' + case['case_id'])
     service.create_baseline(task_id)
+    service.record_event(task_id, {'type': 'model_call', 'usage': {'total_tokens': 193268}})
     worker.enqueue(service, task_id, 'message', '展示本项目全部已批准用例', request_key='approved-real-query')
     client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
         AssistantMessage(content='我来读取本项目的批准用例。', tool_calls=[ToolCall(
@@ -418,6 +419,9 @@ def test_approved_project_query_uses_authorization_not_model_review(conversation
     assert len(payload['shown_references']) == 2
     task = service.get_task(task_id)
     assert task['status'] == 'completed'
+    calls = [e['details'] for e in task['events'] if e['action'] == 'model_call']
+    assert calls[0]['usage']['total_tokens'] == 193268
+    assert all(c['budget_scope'] == 'conversation' for c in calls[1:])
     assert any(e['action'] == 'tool_policy_reviewed' and e['details']['allowed'] for e in task['events'])
 
 
@@ -435,3 +439,15 @@ def test_query_policy_still_denies_foreign_project_case(conversation):
     assert not any(m['kind'] == 'case_collection' for m in chat.list_messages(task_id))
     assert any(e['action'] == 'tool_policy_reviewed' and not e['details']['allowed']
                for e in service.get_task(task_id)['events'])
+
+
+def test_completed_chat_budget_exhaustion_is_visible_not_silently_discarded(conversation, monkeypatch):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    monkeypatch.setenv('SDLC_AGENT_CHAT_MAX_TOTAL_TOKENS', '1')
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='visible-chat-budget')
+    execute_next(service, ConversationModel(), task_id=task_id)
+    assert any('本次对话达到处理预算上限' in m['content'] for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+    assert not chat.get_pending(task_id)

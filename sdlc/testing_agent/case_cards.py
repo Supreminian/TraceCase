@@ -67,15 +67,14 @@ def _card(service, message, case, active):
                     if r['run_id'] == case['run_id'] and r['case_id'] == case['case_id']), None)
         if old and (old['version'], old['revision']) != (case['version'], case['revision']):
             st.caption('此用例在本条消息后已有更新，当前显示最新版本和状态。')
-        st.markdown('**预期：** ' + '；'.join(content['expected_results']))
-        with st.expander('展开详情与需求依据'):
-            detail = get_case(service, case['run_id'], case['case_id'])
-            st.markdown('**前置条件**')
-            st.text('\n'.join(content['preconditions']) or '无')
-            st.markdown('**操作步骤**')
-            st.text('\n'.join(f'{step["number"]}. {step["action"]}' for step in content['steps']))
-            st.markdown('**预期结果**')
-            st.text('\n'.join(content['expected_results']))
+        detail = get_case(service, case['run_id'], case['case_id'])
+        st.markdown('**前置条件**')
+        st.text('\n'.join(content['preconditions']) or '无')
+        st.markdown('**操作步骤**')
+        st.text('\n'.join(f'{step["number"]}. {step["action"]}' for step in content['steps']))
+        st.markdown('**预期结果**')
+        st.text('\n'.join(content['expected_results']))
+        with st.expander('查看需求依据'):
             st.markdown('**关联需求：** ' + '、'.join(content['requirement_ids']))
             for paragraph in detail['paragraphs']:
                 st.caption(paragraph['id'])

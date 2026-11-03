@@ -315,17 +315,6 @@ def live_conversation(service, chat, task_id):
         if task['status'] not in {'completed', 'cancelled'}:
             _questions_in_chat(service, chat, task, active,
                 historical=bool(pending and pending['kind'] == 'budget_exhausted'))
-        if task['run_id'] and not active and not pending and not any(m['kind'] == 'case_collection' for m in messages):
-            with _message('assistant'):
-                with service.connection() as db:
-                    cases = service.legacy._cases(db, task['run_id'])
-                approved = sum(c['status'] == 'approved' for c in cases)
-                st.markdown(f'当前有 **{len(cases)} 条用例**，已审核通过 **{approved} 条**。测试尚未执行。')
-                target = '交付' if approved == len(cases) and cases else '用例评审'
-                if st.button('查看批准交付' if target == '交付' else '开始审核用例', key='chat_open_results_' + task_id):
-                    st.session_state['_chat_artifacts_open_' + task_id] = True
-                    st.session_state['_agent_target_tab_' + task_id] = target
-                    st.rerun(scope='app')
 
 
 def _new_conversation(service, options):

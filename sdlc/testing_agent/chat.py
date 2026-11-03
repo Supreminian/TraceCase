@@ -232,6 +232,14 @@ class ChatService:
         with self._write() as db:
             task = self.service._task(db, task_id)
             if task['status'] in {'completed', 'cancelled'}:
+                if task['status'] == 'completed' and not _recover_only:
+                    content = ('本次对话达到处理预算上限，已有用例和审批结果保持不变。请缩小查询范围后重新发送消息。'
+                               if kind == 'budget_exhausted' else
+                               '本次回复暂未完成，已有用例和审批结果保持不变。你可以重新发送消息后再试。')
+                    key = 'completed-notice-' + hashlib.sha256(str(request_key or public_message_id or identifier()).encode()).hexdigest()[:32]
+                    timestamp = now()
+                    db.execute('INSERT OR IGNORE INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                               (identifier(), task_id, 'agent', 'assistant', 'message', content, 'error', key, timestamp, timestamp))
                 return None
             row = db.execute("SELECT * FROM testing_agent_chat_confirmations WHERE task_id=? AND status='pending'", (task_id,)).fetchone()
             if _recover_only and not row:
