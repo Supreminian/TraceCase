@@ -47,7 +47,8 @@ def _enqueue_in_db(service, db, task_id, operation='start', content='', request_
     project = db.execute('SELECT status FROM projects WHERE id=?', (service.project_id,)).fetchone()
     if not project or project['status'] != 'active':
         raise ValueError('项目已归档，不能继续任务；历史记录仍可查看。')
-    service._active(task)
+    if not (operation == 'message' and task['status'] == 'completed'):
+        service._active(task)
     user = Accounts.authorize(db, service.token, service.workspace_id)
     capability = 'generate' if 'generate' in user['permissions'] else 'regenerate'
     if capability == 'regenerate' and operation != 'message':

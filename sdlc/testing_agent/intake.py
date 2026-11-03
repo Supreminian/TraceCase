@@ -185,11 +185,17 @@ def route_message(service, task_id, content, request_id, client, settings, sink=
             result = IntakeResult()
             child = None
             if kind in {'requirements_replace', 'requirements_append'}:
-                service._active(current)
+                if current['status'] != 'completed':
+                    service._active(current)
                 child = service._insert_task(db, prepared, current['goal'], current['scope'], task_id,
                     current['owner_id'], current['confirmer_id'], current['due_at'])
             elif kind == 'scope_change':
-                child = service._refine_task(db, task_id, content)
+                if current['status'] == 'completed':
+                    child = service._insert_task(db, prepare_input(text=current['input']['normalized_text']),
+                        content.strip(), content.strip(), task_id, current['owner_id'],
+                        current['confirmer_id'], current['due_at'])
+                else:
+                    child = service._refine_task(db, task_id, content)
             if child:
                 _enqueue_in_db(service, db, child, 'start', '', 'intake-' + key, record_chat=True)
                 result = IntakeResult(True, child, '已识别你提供的' + ('测试范围调整' if kind == 'scope_change' else '新版需求')
@@ -197,8 +203,9 @@ def route_message(service, task_id, content, request_id, client, settings, sink=
                 db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
                     (identifier(), task_id, 'handoff', key, current['input_hash'],
                      dumps({'child_task_id': child, 'intent': kind, 'request_id': request_id}), now()))
-                db.execute("UPDATE testing_agent_tasks SET status='partial',error='',next_action=?,updated_at=?,revision=revision+1 WHERE id=?",
-                    (result.message, now(), task_id))
+                if current['status'] != 'completed':
+                    db.execute("UPDATE testing_agent_tasks SET status='partial',error='',next_action=?,updated_at=?,revision=revision+1 WHERE id=?",
+                        (result.message, now(), task_id))
                 service._event(db, task_id, 'chat_task_handoff', {'child_task_id': child, 'intent': kind})
             elif kind == 'clarification_answer':
                 question = db.execute('SELECT * FROM testing_agent_questions WHERE task_id=? AND id=?',

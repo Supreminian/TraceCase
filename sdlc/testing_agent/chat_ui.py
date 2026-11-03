@@ -57,6 +57,15 @@ CSS = '''<style>
 .st-key-chat_welcome {min-height:0;gap:0!important;overflow-y:auto!important}
 .st-key-chat_welcome [data-testid="stElementContainer"]:has(.tc-chat-welcome) {margin-block:auto;flex-shrink:0;width:100%}
 @media(min-width:1000px){.st-key-agent_chat_shell{width:calc(100% + 64px)!important;max-width:none!important;margin-inline:-32px;padding-inline:24px}}
+/* The active composer swaps the send affordance for a real cancel action. */
+.st-key-chat_composer {position:relative;flex-shrink:0}
+.st-key-chat_composer:has(.st-key-chat_stop_generation) [data-testid="stChatInputSubmitButton"] {visibility:hidden;pointer-events:none}
+.st-key-chat_composer:has(.st-key-chat_stop_generation) [data-testid="stChatInput"] textarea {padding-right:52px}
+.st-key-chat_composer > div:has(> .st-key-chat_stop_generation) {position:absolute!important;right:12px;bottom:12px;width:34px!important;z-index:2}
+.st-key-chat_stop_generation button {width:34px!important;min-height:34px!important;height:34px;padding:0!important;border-radius:50%!important;background:#243454!important;border:0!important;color:white!important}
+.st-key-chat_stop_generation button [data-testid="stMarkdownContainer"] {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.st-key-chat_stop_generation button:hover {background:#354b72!important}
+.st-key-chat_stop_generation button:focus-visible {outline:3px solid #9bade5;outline-offset:3px}
 .tc-chat-state {font-size:12px;color:#778398;padding:8px 2px;border-bottom:1px solid #edf0f5;display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
 .tc-chat-source {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 120px;color:#8b95a6}
 .tc-state-dot {width:7px;height:7px;border-radius:100%;background:#64748b;display:inline-block}
@@ -453,9 +462,19 @@ def _workspace_contents(legacy, service, chat):
         active = any(j['status'] in {'queued', 'running'} for j in _jobs(service, selected))
         if task['parent_task_id']:
             st.caption('本轮保留了上轮的需求与讨论关联，原记录可在对话列表中查看。')
-        value = st.chat_input('告诉我需要调整的地方，或补充下一步需求…', key='agent_chat_input_' + selected,
-            max_chars=20_000, accept_file=True, file_type=['md', 'markdown'], max_upload_size=1,
-            disabled=active or not bool({'generate', 'regenerate'} & permissions) or task['status'] in {'completed', 'cancelled'})
+        with st.container(key='chat_composer'):
+            value = st.chat_input('告诉我需要调整的地方，或补充下一步需求…', key='agent_chat_input_' + selected,
+                max_chars=20_000, accept_file=True, file_type=['md', 'markdown'], max_upload_size=1,
+                disabled=active or not bool({'generate', 'regenerate'} & permissions) or task['status'] == 'cancelled')
+            if active and 'generate' in permissions:
+                with st.container(key='chat_stop_generation'):
+                    if st.button('停止生成', icon=':material/stop:', key='chat_cancel_' + selected,
+                                 help='停止生成，保留已生成的内容'):
+                        worker.cancel_work(service, selected)
+                        if task['status'] != 'completed':
+                            service.set_state(selected, 'partial',
+                                next_action='生成已停止，已有内容已保留；可以继续发送消息。')
+                        st.rerun()
         if value:
             def send():
                 content, document = _read_input(value)
@@ -473,9 +492,4 @@ def _workspace_contents(legacy, service, chat):
             followup = _safe_action(send)
             if followup:
                 _select_next(service, followup)
-    if active and 'generate' in permissions:
-        if st.button('停止本轮处理', key='chat_cancel_' + selected):
-            worker.cancel_work(service, selected)
-            service.cancel_task(selected)
-            st.rerun()
     return selected

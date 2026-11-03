@@ -100,7 +100,7 @@ def execute_next(service, client, *, task_id=None, observe=None):
 
     worker.execute(service.db_path, job, owner, runtime_factory=factory)
     record = next(item for item in worker.list_work(service, job['task_id']) if item['id'] == job['id'])
-    assert record['status'] == 'completed', record
+    assert record['status'] == 'completed', record.get('error') or record
     assert not client.outputs, 'the intended model response was never consumed'
     return job
 
@@ -338,3 +338,41 @@ def test_confirming_all_requirements_enqueues_one_child_and_generates_reviewable
     assert all(case['status'] == 'pending_review' for case in run['cases'])
     assert assistant_replies(chat, child_id)[-1]['content'].startswith('两项需求补充已纳入本轮')
     assert worker.claim(service.db_path, 'no-orphan-work') is None
+
+
+def test_completed_task_accepts_streamed_chat_without_reopening_approval(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed',stage='delivery' WHERE id=?", (task_id,))
+    before = service.get_task(task_id)
+    worker.enqueue(service, task_id, 'message', '解释一下已交付的测试范围', request_key='after-approval-chat')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+                               AssistantMessage(content='我可以继续解释已交付成果，批准记录保持不变。'))
+    execute_next(service, client, task_id=task_id)
+    after = service.get_task(task_id)
+    assert after['status'] == 'completed'
+    assert after['revision'] == before['revision']
+    assert after['run_id'] == before['run_id']
+    assert assistant_replies(chat, task_id)[-1]['content'] == '我可以继续解释已交付成果，批准记录保持不变。'
+    assert client.streams
+    with pytest.raises(ValueError, match='取消或完成'):
+        service.add_artifact(task_id, 'case_batch', {'cases': []}, 'cannot-change-approved')
+    assert all(tool.name.startswith('read_') for tool in client.contexts[-1].tools)
+    with pytest.raises(ValueError, match='取消或完成'):
+        worker.enqueue(service, task_id, 'start', request_key='cannot-rerun-approved')
+
+
+def test_completed_task_new_requirements_create_child_preserving_parent(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed',stage='delivery' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '新增规则：标题最多20字。', request_key='after-approval-change')
+    execute_next(service, ConversationModel(MessageIntent(intent='requirements_append', confidence=1)), task_id=task_id)
+    parent = service.get_task(task_id)
+    assert parent['status'] == 'completed'
+    handoff = next(a for a in parent['artifacts'] if a['kind'] == 'handoff')
+    child = service.get_task(handoff['content']['child_task_id'])
+    assert child['parent_task_id'] == task_id
+    assert child['status'] == 'queued'
+    assert '新增规则：标题最多20字。' in child['input']['original_text']
+    assert '新增规则：标题最多20字。' not in parent['input']['original_text']

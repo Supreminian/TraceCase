@@ -152,14 +152,15 @@ class Runtime:
         task = self.service.get_task(self.task_id)
         if task['status'] == 'cancelled':
             raise ValueError('任务已取消；如需继续，请创建关联新任务。')
-        if task['status'] == 'completed':
-            raise ValueError('任务已完成，请创建需求变更任务。')
+        if task['status'] == 'completed' and not content:
+            raise ValueError('任务已完成，不能重跑；可以继续发送消息。')
         session_id = task.get('session_id')
         if not session_id:
             session = self.agent.new_session({'task_id': self.task_id, 'workspace_id': self.service.workspace_id,
                 'project_id': self.service.project_id})
             session_id = session.id
-            self.service.bind_session(self.task_id, session_id)
+            if task['status'] != 'completed':
+                self.service.bind_session(self.task_id, session_id)
         def event(item):
             self.service.record_event(self.task_id, item)
             if self.public_event_sink:
@@ -171,6 +172,9 @@ class Runtime:
                     self.agent.model_client, self.agent.assistant_settings, event)
                 if intake.handled:
                     return self.agent.get_session(session_id)
+            if task['status'] == 'completed':
+                # Completed approval is immutable; continued chat has read-only tools.
+                return self.agent.send_message(session_id, content, on_event=event, request_id=request_id)
             self.service.set_state(self.task_id, 'running', next_action='Agent 正在读取任务和阶段成果。')
             if content:
                 session = self.agent.send_message(session_id, content, on_event=event, request_id=request_id)
@@ -276,10 +280,14 @@ def build_runtime(db_path, token, workspace_id, project_id, task_id, *, executio
     if capability == 'regenerate':
         tools = [tool for tool in tools if tool.name in {'read_task', 'read_project_context', 'inspect_coverage', 'propose_revision'}]
     task = service.get_task(task_id)
+    if task['status'] == 'completed':
+        tools = [tool for tool in tools if tool.name in {
+            'read_task', 'read_requirement_paragraphs', 'read_saved_artifact',
+            'read_project_context', 'read_approved_case'}]
     memory = json.dumps({'goal': task['goal'], 'scope': task['scope'],
                          'confirmed_supplements': [a['content'] for a in task['artifacts'] if a['kind'] == 'confirmed_supplement']}, ensure_ascii=False)
     policy = (Path(__file__).parent / 'AGENTS.md').read_text(encoding='utf-8')
-    assistant = Assistant(ASSISTANT_INSTRUCTION, tools, memory, policy)
+    assistant = Assistant(ASSISTANT_INSTRUCTION + ('\n当前任务已批准完成。可以继续解释和回答问题；禁止更改、重新生成或批准原任务。新的需求或范围调整由系统建立关联任务，原批准记录保留。' if task['status'] == 'completed' else ''), tools, memory, policy)
     review_role = ToolCallReviewer(REVIEWER_INSTRUCTION, memory, policy)
     agent = AgentService(client, store, assistant, review_role, primary, reviewer,
                          max_iterations=int(os.environ.get('SDLC_AGENT_MAX_ITERATIONS', '20')),

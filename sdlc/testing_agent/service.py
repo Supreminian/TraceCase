@@ -346,7 +346,8 @@ class TestingService:
             raise ServiceError('产物类型或标识无效。')
         with self.connection('generate', True) as db:
             task = self._task(db, task_id)
-            self._active(task)
+            if not (kind == 'model_attempt' and task['status'] == 'completed'):
+                self._active(task)
             if input_hash is not None and input_hash != task['input_hash']:
                 raise ServiceError('任务输入版本已改变，旧结果已拒绝写入。')
             old = db.execute('''SELECT * FROM testing_agent_artifacts WHERE task_id=? AND kind=?
@@ -358,7 +359,8 @@ class TestingService:
             artifact_id = identifier()
             db.execute('INSERT INTO testing_agent_artifacts VALUES(?,?,?,?,?,?,?)',
                        (artifact_id, task_id, kind, key, task['input_hash'], dumps(content), now()))
-            db.execute('UPDATE testing_agent_tasks SET updated_at=?,revision=revision+1 WHERE id=?', (now(), task_id))
+            if task['status'] != 'completed':
+                db.execute('UPDATE testing_agent_tasks SET updated_at=?,revision=revision+1 WHERE id=?', (now(), task_id))
             self._event(db, task_id, 'artifact_saved', {'artifact_id': artifact_id, 'kind': kind, 'key': key})
             return artifact_id
 
