@@ -385,7 +385,7 @@ def test_case_cards_survive_failure_after_successful_query(conversation):
     client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
         AssistantMessage(content='我来查询当前项目的批准用例。', tool_calls=[
             ToolCall(id='query-approved', name='list_test_cases', arguments={'status': 'approved'})]),
-        Decision(should_allow=True, reason='读取当前项目'), RuntimeError('provider unavailable'))
+        RuntimeError('provider unavailable'))
     # The business result is durable before the next model turn fails.
     owner = 'query-worker'
     job = worker.claim(service.db_path, owner)
@@ -396,3 +396,42 @@ def test_case_cards_survive_failure_after_successful_query(conversation):
     assert card['state'] == 'completed'
     assert json.loads(card['content'])['query']['status'] == 'approved'
     assert not client.outputs
+
+
+def test_approved_project_query_uses_authorization_not_model_review(conversation):
+    from tests.test_testing_agent import ready
+    service, chat, _ = conversation
+    task_id = ready(service)
+    run = service.finalize_design(task_id)
+    for case in service.legacy.get_run(run)['cases']:
+        service.legacy.review(run, case['case_id'], case['version'], case['revision'],
+                              'approve', '', '符合需求', 'approved-query-' + case['case_id'])
+    service.create_baseline(task_id)
+    worker.enqueue(service, task_id, 'message', '展示本项目全部已批准用例', request_key='approved-real-query')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='我来读取本项目的批准用例。', tool_calls=[ToolCall(
+            id='approved-project', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project'})]),
+        AssistantMessage(content='已在聊天中展示批准用例。'))
+    execute_next(service, client, task_id=task_id)
+    assert not any(context.output_type is Decision for context in client.contexts)
+    payload = json.loads(next(m for m in chat.list_messages(task_id) if m['kind'] == 'case_collection')['content'])
+    assert len(payload['shown_references']) == 2
+    task = service.get_task(task_id)
+    assert task['status'] == 'completed'
+    assert any(e['action'] == 'tool_policy_reviewed' and e['details']['allowed'] for e in task['events'])
+
+
+def test_query_policy_still_denies_foreign_project_case(conversation):
+    from tests.test_testing_agent import ready
+    service, chat, task_id = conversation
+    project = service.legacy.create_project('其他授权边界', '')
+    other = TestingService(service.db_path, service.token, service.workspace_id, project)
+    foreign_run = other.finalize_design(ready(other))
+    worker.enqueue(service, task_id, 'message', '查看用例', request_key='foreign-query')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='读取用例。', tool_calls=[ToolCall(
+            id='foreign-case', name='get_test_case', arguments={'run_id': foreign_run, 'case_id': 'TC1'})]))
+    execute_next(service, client, task_id=task_id)
+    assert not any(m['kind'] == 'case_collection' for m in chat.list_messages(task_id))
+    assert any(e['action'] == 'tool_policy_reviewed' and not e['details']['allowed']
+               for e in service.get_task(task_id)['events'])

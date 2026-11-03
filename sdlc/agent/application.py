@@ -99,7 +99,8 @@ class AgentService:
                  assistant_settings: ModelSettings, reviewer_settings: ModelSettings,
                  max_iterations: int = 8, max_tool_calls: int = 24,
                  authorize: Authorizer | None = None, max_duration_seconds: float = 300,
-                 pause_on_tool_error: bool = False):
+                 pause_on_tool_error: bool = False,
+                 tool_review_policy: Callable[[Session, ToolCall], Decision | None] | None = None):
         if not 1 <= max_iterations <= 100 or not 1 <= max_tool_calls <= 500:
             raise ValueError("Agent iteration and tool limits must be bounded positive values.")
         if not 0 < max_duration_seconds <= 3600:
@@ -122,6 +123,7 @@ class AgentService:
         self.max_duration_seconds = max_duration_seconds
         self.authorize = authorize
         self.pause_on_tool_error = pause_on_tool_error
+        self.tool_review_policy = tool_review_policy
         self._tools = {tool.name: tool for tool in assistant.tools}
 
     @staticmethod
@@ -467,13 +469,20 @@ class AgentService:
             self._emit(on_event, "review_started", session, tool_call_id=call.id, tool=call.name)
             try:
                 self._authorize(session)
-                decision = self.model_client.generate(
-                    self.reviewer.context(session, call), self._settings(self.reviewer_settings, remaining()))
+                decision = self.tool_review_policy(session, call) if self.tool_review_policy else None
+                policy_review = decision is not None
+                if not policy_review:
+                    decision = self.model_client.generate(
+                        self.reviewer.context(session, call), self._settings(self.reviewer_settings, remaining()))
                 remaining()
                 self._authorize(session)
                 if not isinstance(decision, Decision):
                     raise TypeError("Reviewer returned an unexpected type")
-                self._model_event(session, decision, "reviewer", on_event)
+                if policy_review:
+                    self._emit(on_event, "tool_policy_reviewed", session, tool=call.name,
+                               tool_call_id=call.id, allowed=decision.should_allow, reason=decision.reason)
+                else:
+                    self._model_event(session, decision, "reviewer", on_event)
                 if not decision.should_allow:
                     error = "工具审核未通过：" + (decision.reason or "此调用未获授权。")
             except AuthorizationError:
