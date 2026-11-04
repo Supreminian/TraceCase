@@ -115,14 +115,10 @@ def test_chat_keeps_multiple_answers_in_current_conversation_until_one_confirmat
     service, _ = ctx
     task = questions(service)
     app = show(service)
-    app.text_area(key='chat_question_answer_' + task + 'Q1').input('财务负责人审批。')
-    next(b for b in app.button if b.label == '提交这项答复').click().run()
-    assert not app.exception and len(service.list_tasks()) == 1
-    assert next(q for q in service.get_task(task)['questions'] if q['id'] == 'Q1')['revision'] == 2
-    app.text_area(key='chat_question_answer_' + task + 'Q2').input('超时后保留待审批。')
-    next(b for b in app.button if b.label == '提交这项答复').click().run()
-    assert not app.exception and len(service.list_tasks()) == 1
-    next(b for b in app.button if b.label == '确认本轮答复并继续').click().run()
+    app.text_area(key='chat_question_answer_' + task + 'Q1_1').input('财务负责人审批。')
+    app.text_area(key='chat_question_answer_' + task + 'Q2_1').input('超时后保留待审批。')
+    assert not any(b.label == '提交这项答复' for b in app.button)
+    next(b for b in app.button if b.label == '确认全部答复并继续').click().run()
     assert not app.exception and not app.error
     assert len(service.list_tasks()) == 2
     child = service.list_tasks()[0]

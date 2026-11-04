@@ -578,7 +578,8 @@ def test_reviewer_can_apply_reviewed_model_revision_but_cannot_generate_or_manua
     assert reviewer.apply_revision(task, proposal) == 2
     reviewer.execution_capability = 'regenerate'
     reviewer.record_event(task, {'type': 'restricted_revision_work'})
-    assert any(e['action'] == 'restricted_revision_work' for e in owner.get_task(task)['events'])
+    assert any(e['action'] == 'restricted_revision_work' for e in reviewer.get_task(task)['events'])
+    assert not any(e['action'] == 'restricted_revision_work' for e in owner.get_task(task)['events'])
 
 
 def test_evidence_review_is_cached_and_current_content_is_required_for_delivery(ctx):

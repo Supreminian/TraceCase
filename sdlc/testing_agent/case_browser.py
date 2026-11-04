@@ -52,6 +52,9 @@ def get_case(service, run_id, case_id):
     ids = set(case['content']['paragraph_ids'])
     return {'case': case, 'run_id': run_id, 'task_id': task['id'] if task else None,
             'task_status': task['status'] if task else None,
+            'clarifications': [q for q in run['clarifications'] if q['content']['scope'] == 'run'
+                or case_id in q['content']['affected_case_ids']
+                or set(case['content']['requirement_ids']) & set(q['content']['requirement_ids'])],
             'paragraphs': [p for p in run['input']['paragraphs'] if p['id'] in ids]}
 
 
@@ -69,8 +72,8 @@ def publish_collection(service, chat_task_id, query=None, reference=None):
     mid, timestamp = identifier(), now()
     with service.connection('view', True) as db:
         service._task(db, chat_task_id)
-        db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                   (mid, chat_task_id, 'agent', 'assistant', 'case_collection', dumps(payload), 'completed', timestamp, timestamp))
+        db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   (mid, chat_task_id, 'agent', 'assistant', 'case_collection', dumps(payload), 'completed', timestamp, timestamp, service.user['id']))
     return {**{k: v for k, v in result.items() if k != 'items'}, 'message_id': mid,
             'displayed_in_chat': True,
             'cases': [{'run_id': c['run_id'], 'case_id': c['case_id'], 'version': c['version'],

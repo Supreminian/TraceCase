@@ -357,7 +357,8 @@ def test_completed_task_accepts_streamed_chat_without_reopening_approval(convers
     assert client.streams
     with pytest.raises(ValueError, match='取消或完成'):
         service.add_artifact(task_id, 'case_batch', {'cases': []}, 'cannot-change-approved')
-    assert all(tool.name.startswith('read_') or tool.name in {'list_test_cases', 'get_test_case'}
+    assert all(tool.name.startswith('read_') or tool.name in {'list_test_cases', 'get_test_case', 'list_platform_items', 'platform_action_catalog',
+                                            'propose_platform_action', 'show_blocking_clarifications', 'prepare_clarification_answers', 'open_account_page'}
                for tool in client.contexts[-1].tools)
     with pytest.raises(ValueError, match='取消或完成'):
         worker.enqueue(service, task_id, 'start', request_key='cannot-rerun-approved')

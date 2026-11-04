@@ -50,9 +50,10 @@ def _enqueue_in_db(service, db, task_id, operation='start', content='', request_
     if not (operation == 'message' and task['status'] == 'completed'):
         service._active(task)
     user = Accounts.authorize(db, service.token, service.workspace_id)
-    capability = 'generate' if 'generate' in user['permissions'] else 'regenerate'
-    if capability == 'regenerate' and operation != 'message':
-        raise AccessError('当前角色只能发起已有用例的修订。')
+    capability = ('generate' if 'generate' in user['permissions'] else
+                  'regenerate' if 'regenerate' in user['permissions'] else 'view')
+    if capability != 'generate' and operation != 'message':
+        raise AccessError('当前角色只能通过消息查询或处理已有用例的授权操作。')
     Accounts.authorize(db, service.token, service.workspace_id, capability)
     service.user = user
     db.execute('INSERT OR IGNORE INTO testing_agent_artifacts(id,task_id,kind,artifact_key,input_hash,content_json,created_at) VALUES(?,?,?,?,?,?,?)',
@@ -181,7 +182,7 @@ def delegated_identity(path, job):
             raise AccessError('任务发起账号已失效。')
         db.execute('INSERT INTO sessions VALUES (?,?,?,?)', (digest(token), actor['id'], time.time() + 3600, time.time()))
         capability = json.loads(job.get('payload', '{}')).get('capability', 'generate')
-        if capability not in {'generate', 'regenerate'}:
+        if capability not in {'generate', 'regenerate', 'view'}:
             raise AccessError('无效执行权限。')
         Accounts.authorize(db, token, job['workspace_id'], capability)
         if not db.execute('SELECT 1 FROM project_workspaces WHERE workspace_id=? AND project_id=?', (job['workspace_id'], job['project_id'])).fetchone():
@@ -223,7 +224,7 @@ def execute(path, job, owner, *, runtime_factory=None):
             service = TestingService(path, token, job['workspace_id'], job['project_id'])
             service.execution_capability = payload.get('capability', 'generate')
             chat = ChatService(service)
-            with service.connection('generate', True) as db:
+            with service.connection(service.execution_capability, True) as db:
                 task = service._task(db, job['task_id'])
                 db.execute('INSERT OR IGNORE INTO testing_agent_artifacts(id,task_id,kind,artifact_key,input_hash,content_json,created_at) VALUES(?,?,?,?,?,?,?)',
                            (uuid4().hex, task['id'], 'interaction_policy', 'chat-v1', task['input_hash'],

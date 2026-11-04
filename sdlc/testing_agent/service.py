@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS testing_agent_tasks (
  next_action TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', due_at TEXT, session_id TEXT,
  budget_json TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS testing_tasks_project ON testing_agent_tasks(workspace_id,project_id,created_at);
+CREATE TABLE IF NOT EXISTS testing_agent_user_sessions (
+ task_id TEXT NOT NULL REFERENCES testing_agent_tasks(id), actor_id TEXT NOT NULL REFERENCES users(id),
+ session_id TEXT NOT NULL, PRIMARY KEY(task_id,actor_id));
 CREATE TABLE IF NOT EXISTS testing_agent_artifacts (
  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES testing_agent_tasks(id),
  kind TEXT NOT NULL, artifact_key TEXT NOT NULL, input_hash TEXT NOT NULL,
@@ -144,6 +147,8 @@ class TestingService:
         result['budget'] = json.loads(result.pop('budget_json'))
         result['document'] = result['input']
         result['created_by'] = result.get('created_by') or result['owner_id']
+        if result['input'].get('kind') == 'conversation' and result['created_by'] != self.user['id']:
+            raise ServiceError('该 Agent 对话不属于当前登录账号。')
         return result
 
     def _event(self, db, task_id, action, details):
@@ -201,7 +206,11 @@ class TestingService:
         if resource_ids is not None:
             from sdlc.testing_agent.resources import ResourceLibrary
             resources = ResourceLibrary(self.db_path, self.token, self.workspace_id, self.project_id).snapshot(resource_ids)
-        with self.connection('generate', True) as db:
+        conversation = prepared.get('kind') == 'conversation' and initial_message is not None
+        with self.connection('view' if conversation else 'generate', True) as db:
+            if conversation and 'generate' not in self.user['permissions']:
+                if parent_task_id or (owner_id and owner_id != self.user['id']) or confirmer_id:
+                    raise ServiceError('当前角色可创建自己的查询对话，不能分派测试任务或需求确认人。')
             task_id = self._insert_task(db, prepared, goal, scope, parent_task_id, owner_id,
                                         confirmer_id, due_at, budget, resources)
             if initial_message is not None:
@@ -306,18 +315,27 @@ class TestingService:
             raise ServiceError('分页参数无效。')
         with self.connection() as db:
             return [self._task(db, r['id']) for r in db.execute('''SELECT id FROM testing_agent_tasks
-                WHERE workspace_id=? AND project_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?''',
-                (self.workspace_id, self.project_id, limit, offset))]
+                WHERE workspace_id=? AND project_id=?
+                AND (COALESCE(json_extract(input_json,'$.kind'),'')!='conversation' OR COALESCE(created_by,owner_id)=?)
+                ORDER BY created_at DESC,id LIMIT ? OFFSET ?''',
+                (self.workspace_id, self.project_id, self.user['id'], limit, offset))]
 
     def get_task(self, task_id):
         with self.connection() as db:
             task = self._task(db, task_id)
             task['artifacts'] = [{**dict(r), 'content': json.loads(r['content_json'])} for r in db.execute(
                 'SELECT * FROM testing_agent_artifacts WHERE task_id=? ORDER BY created_at,id', (task_id,))]
+            # Model transcripts can contain permission-specific tool results.
+            # Legacy attempts are attributed through their immutable save event.
+            task['artifacts'] = [a for a in task['artifacts'] if a['kind'] != 'model_attempt'
+                or (a['content'].get('actor_id') or next((e['actor_id'] for e in db.execute(
+                    "SELECT actor_id FROM testing_agent_events WHERE task_id=? AND action='artifact_saved' AND json_extract(details_json,'$.artifact_id')=?",
+                    (task_id, a['id']))), task['created_by'])) == self.user['id']]
             task['questions'] = [self._question(r) for r in db.execute(
                 'SELECT * FROM testing_agent_questions WHERE task_id=? ORDER BY id', (task_id,))]
             task['events'] = [{**dict(r), 'details': json.loads(r['details_json'])} for r in db.execute(
-                'SELECT * FROM testing_agent_events WHERE task_id=? ORDER BY seq', (task_id,))]
+                "SELECT * FROM testing_agent_events WHERE task_id=? AND (actor_id=? OR action IN ('created','model_call','question_edited','answer_submitted','requirement_confirmed','requirements_continued','platform_action_confirmed')) ORDER BY seq",
+                (task_id, self.user['id']))]
             task['proposals'] = [{**dict(r), 'content': json.loads(r['content_json'])} for r in db.execute(
                 'SELECT * FROM testing_agent_proposals WHERE task_id=? ORDER BY created_at,id', (task_id,))]
             task['baselines'] = [{**dict(r), 'snapshot': json.loads(r['snapshot_json'])} for r in db.execute(
@@ -336,8 +354,12 @@ class TestingService:
     def set_state(self, task_id, status, stage=None, next_action='', error='', expected_revision=None):
         if status not in TASK_STATUSES:
             raise ServiceError('无效任务状态。')
-        with self.connection('generate', True) as db:
+        read_chat = self.execution_capability == 'view'
+        with self.connection('view' if read_chat else 'generate', True) as db:
             task = self._task(db, task_id)
+            if read_chat and (task['input'].get('kind') != 'conversation'
+                    or status not in {'running', 'partial', 'failed'} or stage not in {None, 'conversation'}):
+                raise ServiceError('只读对话不能更改测试任务状态。')
             self._active(task)
             if status == 'completed':
                 raise ServiceError('完成状态必须由批准基线门禁产生。')
@@ -355,15 +377,17 @@ class TestingService:
         return self.set_state(task_id, status, stage=stage, error=error or '')
 
     def bind_session(self, task_id, session_id):
-        with self.connection('generate', True) as db:
+        with self.connection('view' if self.execution_capability == 'view' else 'generate', True) as db:
             task = self._task(db, task_id)
-            self._active(task)
-            db.execute('UPDATE testing_agent_tasks SET session_id=?,revision=revision+1,updated_at=? WHERE id=?',
-                       (session_id, now(), task_id))
+            db.execute('INSERT INTO testing_agent_user_sessions VALUES(?,?,?) ON CONFLICT(task_id,actor_id) DO UPDATE SET session_id=excluded.session_id',
+                       (task_id, self.user['id'], session_id))
+            if task['created_by'] == self.user['id'] and task['status'] != 'completed':
+                db.execute('UPDATE testing_agent_tasks SET session_id=?,revision=revision+1,updated_at=? WHERE id=?',
+                           (session_id, now(), task_id))
             self._event(db, task_id, 'session_bound', {'session_id': session_id})
 
     def record_event(self, task_id, event):
-        with self.connection('generate', True) as db:
+        with self.connection('view' if self.execution_capability == 'view' else 'generate', True) as db:
             self._task(db, task_id)
             self._event(db, task_id, str(event.get('type', 'agent_event'))[:80], event)
 
@@ -378,7 +402,8 @@ class TestingService:
     def add_artifact(self, task_id, kind, content, key='default', input_hash=None):
         if not kind or len(kind) > 64 or not key or len(key) > 200:
             raise ServiceError('产物类型或标识无效。')
-        with self.connection('generate', True) as db:
+        capability = 'view' if self.execution_capability == 'view' and kind == 'model_attempt' else 'generate'
+        with self.connection(capability, True) as db:
             task = self._task(db, task_id)
             if not (kind == 'model_attempt' and task['status'] == 'completed'):
                 self._active(task)
@@ -810,7 +835,8 @@ class TestingService:
                        (identifier(), child, kind, 'default', prepared['input_hash'], dumps(content), now()))
         return child
 
-    def confirm_answers_and_continue(self, task_id, question_revisions, reason):
+    def confirm_answers_and_continue(self, task_id, question_revisions, reason, *,
+                                     answers=None, require_all_blocking=False):
         """Commit confirmed facts, public handoff and one queued turn together."""
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
             raise ServiceError('请填写需求确认说明。')
@@ -818,6 +844,9 @@ class TestingService:
                 not isinstance(qid, str) or not qid or type(revision) is not int or revision < 1
                 for qid, revision in question_revisions.items()):
             raise ServiceError('请选择已提交的答复，并保留其当前版本。')
+        if answers is not None and (not isinstance(answers, dict) or set(answers) != set(question_revisions)
+                or any(not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000 for text in answers.values())):
+            raise ServiceError('请为本次确认的每个问题提供 1–4,000 字符的答复。')
         from sdlc.testing_agent.chat import ChatService
         from sdlc.testing_agent.worker import initialize, _enqueue_in_db
         initialize(self.db_path)
@@ -825,7 +854,8 @@ class TestingService:
         # These questions become immutable once confirmed. Key by their identities
         # so a double click with either the old or refreshed revision reuses the
         # same continuation; revisions are checked before the first commit.
-        key = 'requirements-' + fingerprint(sorted(question_revisions))[:40]
+        key = ('requirements-bundle-' + fingerprint({'questions': sorted(question_revisions), 'answers': answers})[:40]
+               if answers is not None else 'requirements-' + fingerprint(sorted(question_revisions))[:40])
         with self.connection('manage', True) as db:
             task = self._task(db, task_id)
             prior = db.execute("SELECT content_json FROM testing_agent_artifacts WHERE task_id=? AND kind='handoff' AND artifact_key=?",
@@ -835,6 +865,17 @@ class TestingService:
             active = db.execute("SELECT 1 FROM agent_work_items WHERE task_id=? AND status IN ('queued','running')", (task_id,)).fetchone()
             if active:
                 raise ServiceError('Agent 仍在处理当前消息；请等本轮回复后再确认需求补充。')
+            if require_all_blocking:
+                blockers = {row['id'] for row in db.execute(
+                    "SELECT id,content_json FROM testing_agent_questions WHERE task_id=? AND status IN ('open','answered')",
+                    (task_id,)) if json.loads(row['content_json'])['blocking']}
+                if not blockers <= set(question_revisions):
+                    raise ServiceError('请一并回答并确认全部阻断性澄清，再继续生成。')
+            if answers is not None:
+                if task['confirmer_id'] and self.user['id'] != task['confirmer_id']:
+                    raise ServiceError('仅本任务指定的需求确认人可以确认该答复。')
+                from sdlc.testing_agent.clarifications import _save_bundle_answers
+                question_revisions = _save_bundle_answers(self, db, task_id, answers, question_revisions)
             selected_rows = [db.execute('SELECT status FROM testing_agent_questions WHERE task_id=? AND id=?',
                 (task_id, qid)).fetchone() for qid in question_revisions]
             already_confirmed = all(q and q['status'] == 'confirmed' for q in selected_rows)

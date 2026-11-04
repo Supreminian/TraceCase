@@ -49,6 +49,7 @@ continue_generation：仅当前存在给定待回应的生成计划/失败确认
 该意图必须 explicit_confirmation=true，并将表达同意的原文逐字复制到 evidence_quote。
 询问“为什么失败”“可以继续吗”、否定或附带未满足条件时都不能视为同意；应选conversation。
 通过/退回用例、确认需求事实、批准导出、角色权限等永远不是本分类器可授权的行为，归为conversation。
+修改现有澄清问题、调整阻断标记、查询审批人、重生成某条用例等平台操作也归为conversation，由Agent选择对应工具；不要当作PRD替换或测试范围变更。一次回答多个澄清时归为conversation，由Agent整理为统一答复草稿。
 只有清楚且信息充分时使用变更类型。信心不足或存在多个冲突意图时选conversation，并降低confidence。
 '''
 
@@ -84,6 +85,10 @@ def _job(service, task_id, request_id):
             return None
         job = dict(row)
         job['payload'] = json.loads(job['payload'])
+        if job['payload'].get('platform_action_id'):
+            from sdlc.testing_agent.platform_actions import confirmed_regeneration
+            confirmed_regeneration(service, task_id, request_id)
+            return None
         confirmation_id = job['payload'].get('confirmation_id')
         job['confirmation'] = None
         if confirmation_id:

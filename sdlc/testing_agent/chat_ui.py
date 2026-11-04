@@ -202,9 +202,9 @@ def _confirmation(service, chat, task_id, pending, active=False):
         st.caption('这次确认只决定生成流程；需求事实确认、用例审核和批准导出仍由你单独操作。')
 
 
-def _questions_in_chat(service, chat, task, active, historical=False):
-    with service.connection() as db:
-        questions = [service._question(row) for row in db.execute("SELECT * FROM testing_agent_questions WHERE task_id=? AND status IN ('open','answered') ORDER BY id", (task['id'],))]
+def _questions_in_chat(service, chat, task, active, historical=False, *, key_suffix=''):
+    from sdlc.testing_agent.clarifications import pending_questions, submit_bundle
+    questions = pending_questions(service, task['id'])
     if not questions:
         return
     if historical:
@@ -215,42 +215,48 @@ def _questions_in_chat(service, chat, task, active, historical=False):
                 if question.get('answer'):
                     st.text('已保存答复：' + question['answer']['text'])
         return
+    permissions = service.user['permissions']
+    can_answer = 'generate' in permissions
+    can_confirm = ('manage' in permissions and
+                   (not task['confirmer_id'] or task['confirmer_id'] == service.user['id']))
+    questions = sorted(questions, key=lambda q: (not q['content']['blocking'], q['id']))
+    blockers = [q for q in questions if q['content']['blocking']]
+    active = active or any(j['status'] in {'queued', 'running'} for j in _jobs(service, task['id']))
     with _message('assistant'):
-        st.markdown('**这些需求还需要你补充**')
-        for question in questions:
-            q = question['content']
-            st.markdown(q['question'])
-            with st.expander('相关需求依据', key='chat_question_sources_' + task['id'] + q['id']):
-                for paragraph in task['input']['paragraphs']:
-                    if paragraph['id'] in q['paragraph_ids']:
-                        st.caption(paragraph['id'])
-                        st.text(paragraph['text'])
-            permissions = service.legacy.user['permissions']
-            if question['status'] == 'open' and 'generate' in permissions:
-                with st.form('chat_question_' + task['id'] + q['id']):
-                    answer = st.text_area('你的答复', max_chars=4000, key='chat_question_answer_' + task['id'] + q['id'])
-                    submitted = st.form_submit_button('提交这项答复', disabled=active)
-                if submitted:
-                    def submit():
-                        service.submit_answer(task['id'], q['id'], answer, expected_revision=question['revision'])
-                        chat.post_user(task['id'], '针对「' + q['question'] + '」的答复：\n\n' + answer, request_key=uuid4().hex)
-                        return True
-                    if _safe_action(submit):
-                        st.rerun(scope='app')
-            elif question['status'] == 'answered':
-                answer = question.get('answer') or {}
-                st.info('已收到答复：' + answer.get('text', ''))
-                if answer.get('disposition') != 'answer' or 'manage' not in permissions:
-                    st.caption('等待指定的需求确认人确认；这条答复还没有成为业务规则。')
-        ready = {q['id']: q['revision'] for q in questions
-                 if q['status'] == 'answered' and (q.get('answer') or {}).get('disposition') == 'answer'}
-        if ready and 'manage' in service.legacy.user['permissions']:
-            st.caption(f'本轮有 {len(ready)} 项答复待确认。确认后一起交给 Agent 继续；其他未解决的问题仍会保留。')
-            if st.button('确认本轮答复并继续', key='chat_confirm_answers_' + task['id'], disabled=active):
-                result = _safe_action(lambda: service.confirm_answers_and_continue(task['id'], ready,
-                    '在聊天中确认已提交的答复作为本轮需求补充。'))
-                if result:
+        st.markdown('**请统一确认这些需求澄清**')
+        if blockers:
+            st.caption(f'共 {len(blockers)} 项阻断性澄清。填写并统一确认后，Agent 将基于这一组答复继续处理。')
+        else:
+            st.caption('这些补充项不会阻断明确部分。你可以填写需要补充的内容后统一确认。')
+        answers = {}
+        with st.form('chat_question_bundle_' + task['id'] + key_suffix):
+            for question in questions:
+                q = question['content']
+                st.markdown('**' + q['id'] + (' · 需要确认' if q['blocking'] else ' · 可选补充') + '**')
+                st.markdown(q['question'])
+                with st.expander('相关需求依据'):
+                    for paragraph in task['input']['paragraphs']:
+                        if paragraph['id'] in q['paragraph_ids']:
+                            st.caption(paragraph['id'])
+                            st.text(paragraph['text'])
+                previous = question.get('answer') or {}
+                answers[q['id']] = st.text_area('你的答复 · ' + q['id'],
+                    value=previous.get('text', ''), max_chars=4000,
+                    key='chat_question_answer_' + task['id'] + q['id'] + '_' + str(question['revision']) + key_suffix,
+                    disabled=not can_answer and not can_confirm)
+            label = '确认全部答复并继续' if can_confirm else '统一提交，等待确认'
+            submitted = st.form_submit_button(label, disabled=active or not (can_answer or can_confirm))
+        if not can_confirm:
+            st.caption('统一提交后，由需求确认人确认这一组答复；确认前不会将其作为业务事实交给模型。')
+        if submitted:
+            filled = {qid: value for qid, value in answers.items() if value.strip()}
+            revisions = {q['id']: q['revision'] for q in questions if q['id'] in filled}
+            result = _safe_action(lambda: submit_bundle(service, task['id'], filled, revisions,
+                '在聊天中统一确认全部阻断性澄清及所填写的补充答复。', confirm=can_confirm))
+            if result:
+                if can_confirm:
                     _select_next(service, result['task_id'])
+                st.rerun(scope='app')
 
 
 @st.fragment(run_every=0.4)
@@ -289,6 +295,7 @@ def live_conversation(service, chat, task_id):
                 if task['run_id']:
                     st.caption('这是一项已有任务，已保存成果和审核记录可以继续使用。')
         progress = []
+        shown_question_tasks = set()
         for message in messages:
             if message['kind'] == 'progress':
                 progress.append(message['content'])
@@ -297,6 +304,21 @@ def live_conversation(service, chat, task_id):
                 from sdlc.testing_agent.case_cards import render_collection
                 with _message('assistant'):
                     render_collection(service, message, active)
+                continue
+            if message['kind'] == 'platform_action':
+                from sdlc.testing_agent.platform_ui import render_action
+                with _message('assistant'):
+                    render_action(service, task_id, message, active)
+                continue
+            if message['kind'] == 'clarification_bundle':
+                try:
+                    target_id = json.loads(message['content'])['target_task_id']
+                    target = service.get_task(target_id)
+                    if target_id not in shown_question_tasks:
+                        _questions_in_chat(service, chat, target, active, key_suffix=message['id'])
+                        shown_question_tasks.add(target_id)
+                except (ValueError, KeyError, TypeError):
+                    st.warning('该组澄清暂不可用，请检查当前任务权限。')
                 continue
             content = message['content']
             if pending and pending['kind'] == 'budget_exhausted' and message['id'] == pending_message_id:
@@ -320,7 +342,7 @@ def live_conversation(service, chat, task_id):
             st.caption(' · '.join(progress[-2:]))
         if pending:
             _confirmation(service, chat, task_id, pending, active)
-        if task['status'] not in {'completed', 'cancelled'}:
+        if task['status'] not in {'completed', 'cancelled'} and task_id not in shown_question_tasks:
             _questions_in_chat(service, chat, task, active,
                 historical=bool(pending and pending['kind'] == 'budget_exhausted'))
 
@@ -335,7 +357,7 @@ def _new_conversation(service, options):
                 '<span class="tc-chat-tag">用例修订</span></div>', unsafe_allow_html=True)
         value = st.chat_input('描述测试需求，或粘贴 / 上传 PRD…', key='agent_new_chat_' + service.project_id,
             max_chars=20_000, accept_file=True, file_type=['md', 'markdown'], max_upload_size=1,
-            disabled='generate' not in service.legacy.user['permissions'])
+            disabled='view' not in service.legacy.user['permissions'])
         if value:
             def create():
                 content, document = _read_input(value)
@@ -438,7 +460,7 @@ def _workspace_contents(legacy, service, chat):
         selected = fallback_task()
         st.session_state['_chat_next_task_' + service.project_id] = selected
     st.session_state[canonical_key] = selected
-    if right.button('新对话', key='chat_new_conversation', width='stretch', disabled='generate' not in legacy.user['permissions']):
+    if right.button('新对话', key='chat_new_conversation', width='stretch', disabled='view' not in legacy.user['permissions']):
         st.session_state['_agent_create'] = True
         st.rerun()
     options = {}
@@ -458,7 +480,7 @@ def _workspace_contents(legacy, service, chat):
             format_func=lambda uid: '空间管理者' if uid is None else next(m['display_name'] for m in members if m['id'] == uid))
         options['due_at'] = st.text_input('截止日期（YYYY-MM-DD，可选）') or None
     if not selected:
-        _new_conversation(service, options)
+        _new_conversation(service, options if 'generate' in legacy.user['permissions'] else {})
         return
     task = service.get_task(selected)
     permissions = legacy.user['permissions']
@@ -471,7 +493,7 @@ def _workspace_contents(legacy, service, chat):
         with st.container(key='chat_composer'):
             value = st.chat_input('告诉我需要调整的地方，或补充下一步需求…', key='agent_chat_input_' + selected,
                 max_chars=20_000, accept_file=True, file_type=['md', 'markdown'], max_upload_size=1,
-                disabled=active or not bool({'generate', 'regenerate'} & permissions) or task['status'] == 'cancelled')
+                disabled=active or 'view' not in permissions or task['status'] == 'cancelled')
             if active and 'generate' in permissions:
                 with st.container(key='chat_stop_generation'):
                     if st.button('停止生成', icon=':material/stop:', key='chat_cancel_' + selected,

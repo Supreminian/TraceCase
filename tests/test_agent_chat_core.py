@@ -248,6 +248,7 @@ def test_crash_between_failed_result_and_prompt_cannot_bypass_confirmation():
 
 class AuditService:
     def __init__(self):
+        self.user = {'id': 'audit-test-user'}
         self.events = []
         self.artifacts = []
 

@@ -139,7 +139,7 @@ def test_budget_audit_records_the_context_actually_sent_to_the_provider():
             wire.append(actual)
             return AssistantMessage(content='已收到')
 
-    service = SimpleNamespace(get_task=lambda task: {'events': []},
+    service = SimpleNamespace(user={'id': 'audit-test-user'}, get_task=lambda task: {'events': []},
         record_event=lambda *args: None,
         add_artifact=lambda task, kind, content, key: artifacts.append(content))
     client = BudgetedClient(Provider(), service, 'task', lambda: None)

@@ -96,6 +96,13 @@ class ChatService:
             for statement in SCHEMA.split(';'):
                 if statement.strip():
                     db.execute(statement)
+            if 'audience_user_id' not in {r['name'] for r in db.execute('PRAGMA table_info(testing_agent_chat_messages)')}:
+                db.execute("ALTER TABLE testing_agent_chat_messages ADD COLUMN audience_user_id TEXT NOT NULL DEFAULT ''")
+                db.execute("""UPDATE testing_agent_chat_messages AS m SET audience_user_id=COALESCE(
+                    CASE WHEN m.actor_id!='agent' THEN m.actor_id ELSE
+                    (SELECT u.actor_id FROM testing_agent_chat_messages u WHERE u.task_id=m.task_id
+                     AND u.role='user' AND u.seq<m.seq ORDER BY u.seq DESC LIMIT 1) END,
+                    (SELECT COALESCE(t.created_by,t.owner_id) FROM testing_agent_tasks t WHERE t.id=m.task_id),'')""")
             columns = {r['name'] for r in db.execute('PRAGMA table_info(testing_agent_chat_confirmations)')}
             for column in ('plan_hash', 'followup_task_id'):
                 if column not in columns:
@@ -104,7 +111,8 @@ class ChatService:
     @contextmanager
     def _write(self):
         with self.service.connection('view', True) as db:
-            capability = 'generate' if 'generate' in self.service.user['permissions'] else 'regenerate'
+            capability = ('generate' if 'generate' in self.service.user['permissions'] else
+                          'regenerate' if 'regenerate' in self.service.user['permissions'] else 'view')
             Accounts.authorize(db, self.service.token, self.service.workspace_id, capability)
             project = db.execute('SELECT status FROM projects WHERE id=?', (self.service.project_id,)).fetchone()
             if not project or project['status'] != 'active':
@@ -127,7 +135,7 @@ class ChatService:
             raise ServiceError('对话分页参数无效。')
         with self.service.connection() as db:
             self.service._task(db, task_id)
-            rows = db.execute('SELECT * FROM (SELECT * FROM testing_agent_chat_messages WHERE task_id=? ORDER BY seq DESC LIMIT ?) ORDER BY seq', (task_id, limit))
+            rows = db.execute('SELECT * FROM (SELECT * FROM testing_agent_chat_messages WHERE task_id=? AND audience_user_id=? ORDER BY seq DESC LIMIT ?) ORDER BY seq', (task_id, self.service.user['id'], limit))
             return [self._message(row) for row in rows]
 
     def _post_user_db(self, db, task_id, content, request_key):
@@ -144,8 +152,8 @@ class ChatService:
                     raise ServiceError('请求标识已用于不同的对话内容。')
                 return self._message(old)
         message_id, timestamp = identifier(), now()
-        db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                   (message_id, task_id, actor, 'user', content, 'completed', request_key, timestamp, timestamp))
+        db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   (message_id, task_id, actor, 'user', content, 'completed', request_key, timestamp, timestamp, self.service.user['id']))
         return self._message(db.execute('SELECT * FROM testing_agent_chat_messages WHERE id=?', (message_id,)).fetchone())
 
     def post_user(self, task_id, content, request_key=None):
@@ -205,9 +213,9 @@ class ChatService:
                 timestamp = now()
                 db.execute("UPDATE testing_agent_chat_confirmations SET kind='budget_exhausted',reason=?,prompt=?,updated_at=?,revision=revision+1 WHERE id=?",
                     (BUDGET_REASON, BUDGET_PROMPT, timestamp, pending['id']))
-                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                     (identifier(), task_id, 'agent', 'assistant', 'confirmation', BUDGET_REASON + '\n\n' + BUDGET_PROMPT,
-                     'completed', 'budget-recovery:' + pending['id'], timestamp, timestamp))
+                     'completed', 'budget-recovery:' + pending['id'], timestamp, timestamp, self.service.user['id']))
                 db.execute("UPDATE testing_agent_tasks SET next_action=?,error='',updated_at=?,revision=revision+1 WHERE id=?",
                     (BUDGET_PROMPT, timestamp, task_id))
                 self.service._event(db, task_id, 'chat_budget_reclassified', {'confirmation_id': pending['id']})
@@ -231,8 +239,9 @@ class ChatService:
             raise ServiceError('方案版本标识无效。')
         with self._write() as db:
             task = self.service._task(db, task_id)
-            if task['status'] in {'completed', 'cancelled'}:
-                if task['status'] == 'completed' and not _recover_only:
+            read_only = self.service.execution_capability == 'view'
+            if task['status'] in {'completed', 'cancelled'} or read_only:
+                if (task['status'] == 'completed' or read_only) and not _recover_only:
                     content = ('本次对话达到处理预算上限，已有用例和审批结果保持不变。请缩小查询范围后重新发送消息。'
                                if kind == 'budget_exhausted' else
                                '本次回复暂未完成，已有用例和审批结果保持不变。你可以重新发送消息后再试。')
@@ -246,8 +255,8 @@ class ChatService:
                     if prior_message:
                         db.execute("UPDATE testing_agent_chat_messages SET content=?,state='error',updated_at=? WHERE id=?", (content, timestamp, prior_message['id']))
                     else:
-                        db.execute('INSERT OR IGNORE INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                                   (identifier(), task_id, 'agent', 'assistant', 'message', content, 'error', key, timestamp, timestamp))
+                        db.execute('INSERT OR IGNORE INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                                   (identifier(), task_id, 'agent', 'assistant', 'message', content, 'error', key, timestamp, timestamp, self.service.user['id']))
                 return None
             row = db.execute("SELECT * FROM testing_agent_chat_confirmations WHERE task_id=? AND status='pending'", (task_id,)).fetchone()
             if _recover_only and not row:
@@ -274,9 +283,9 @@ class ChatService:
             if message:
                 db.execute("UPDATE testing_agent_chat_messages SET kind='confirmation',content=?,state=?,updated_at=? WHERE id=?", (public_content, public_state, timestamp, message['id']))
             else:
-                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                            (identifier(), task_id, 'agent', 'assistant', 'confirmation', public_content,
-                            public_state, 'confirmation:' + confirmation_id, timestamp, timestamp))
+                            public_state, 'confirmation:' + confirmation_id, timestamp, timestamp, self.service.user['id']))
             db.execute("UPDATE testing_agent_tasks SET status='waiting_confirmation',next_action=?,error=?,updated_at=?,revision=revision+1 WHERE id=?",
                        (safe_prompt, '' if normal_wait else safe_reason, timestamp, task_id))
             self.service._event(db, task_id, 'chat_confirmation_requested', {'confirmation_id': confirmation_id, 'kind': kind})
@@ -401,6 +410,8 @@ class ChatService:
             raise ServiceError('确认版本无效。')
         with self._write() as db:
             task = self.service._task(db, task_id)
+            if not {'generate', 'regenerate'} & self.service.user['permissions']:
+                raise ServiceError('当前角色可查询和讨论，不能确认测试生成；请新建查询对话。')
             for statement in WORK_SCHEMA.split(';'):
                 if statement.strip():
                     db.execute(statement)
@@ -494,8 +505,8 @@ class ChatService:
                 if row:
                     return self._message(row)
                 message_id = identifier()
-                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                           (message_id, task_id, 'agent', 'assistant', 'progress', summary, 'error' if failed else 'completed', event_key, timestamp, timestamp))
+                db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,kind,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (message_id, task_id, 'agent', 'assistant', 'progress', summary, 'error' if failed else 'completed', event_key, timestamp, timestamp, self.service.user['id']))
                 return self._message(db.execute('SELECT * FROM testing_agent_chat_messages WHERE id=?', (message_id,)).fetchone())
             external_id = event.get('message_id')
             if external_id:
@@ -519,6 +530,6 @@ class ChatService:
                 return self._message(db.execute('SELECT * FROM testing_agent_chat_messages WHERE id=?', (row['id'],)).fetchone())
             message_id = identifier()
             state = 'completed' if kind in {'assistant_message', 'assistant_end'} else 'streaming'
-            db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,content,state,request_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                       (message_id, task_id, 'agent', 'assistant', value, state, event_key, timestamp, timestamp))
+            db.execute('INSERT INTO testing_agent_chat_messages(id,task_id,actor_id,role,content,state,request_key,created_at,updated_at,audience_user_id) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (message_id, task_id, 'agent', 'assistant', value, state, event_key, timestamp, timestamp, self.service.user['id']))
             return self._message(db.execute('SELECT * FROM testing_agent_chat_messages WHERE id=?', (message_id,)).fetchone())
