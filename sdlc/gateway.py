@@ -16,6 +16,7 @@ import websockets
 
 from sdlc.accounts import Accounts, AccessError, COOKIE, SESSION_SECONDS, logout_proof, session_marker
 from sdlc import github_auth, web_ui, profiles, profile_ui
+from sdlc.agent.http import agent_routes
 
 DB_PATH = os.environ.get('SDLC_DB_PATH', str(Path(__file__).resolve().parents[1] / 'data/sdlc.sqlite3'))
 UPSTREAM = 'http://127.0.0.1:' + os.environ.get('SDLC_PRIVATE_PORT', '8502')
@@ -531,6 +532,7 @@ async def socket_proxy(websocket):
 
 
 app = Starlette(routes=[
+    *agent_routes(DB_PATH),
     Route('/auth/session', session_status),
     Route('/auth/account', account_page),
     Route('/auth/profile', profile_page, methods=['GET', 'POST']),

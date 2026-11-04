@@ -1,0 +1,536 @@
+"""Chat regressions cross the real queue, authorization, runtime and database.
+
+The only substituted boundary is the provider. Public chunks are inspected while
+the worker is still running, so a completed-message-only implementation fails.
+"""
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from sdlc.accounts import Accounts
+from sdlc.agent import AssistantMessage, Decision, ToolCall
+from sdlc.agent.composition import build_runtime
+from sdlc.secure_service import Service
+from sdlc.testing_agent import worker
+from sdlc.testing_agent.chat import ChatService
+from sdlc.testing_agent.document_context import DocumentContext
+from sdlc.testing_agent.domain import CaseBatch, CoveragePlan, EvidenceReview, RequirementAnalysis
+from sdlc.testing_agent.intake import MessageIntent
+from sdlc.testing_agent.service import TestingService
+
+
+PRD = ('# 便签管理\n\n用户可以创建便签，标题长度上限待确认。'
+       '\n\n用户可以删除自己创建的便签，删除前是否二次确认待明确。')
+
+
+class ConversationModel:
+    def __init__(self, *outputs):
+        self.outputs = list(outputs)
+        self.contexts = []
+        self.streams = []
+        self.after_chunk = None
+        self.last_usage = {}
+        self.last_metadata = {}
+
+    def generate(self, context, settings):
+        self.contexts.append(context)
+        assert self.outputs, 'unexpected model call after the scripted conversation'
+        response = self.outputs.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        assert isinstance(response, context.output_type)
+        self.last_usage = {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}
+        self.last_metadata = {'request_id': 'mock-' + str(len(self.contexts))}
+        return response
+
+    def generate_stream(self, context, settings, on_delta):
+        assert context.output_type is AssistantMessage
+        response = self.generate(context, settings)
+        if response.content:
+            chunks = (response.content[:2], response.content[2:])
+            for chunk in chunks:
+                if chunk:
+                    on_delta(chunk)
+                    self.streams.append(chunk)
+                    if self.after_chunk:
+                        self.after_chunk()
+        return response
+
+
+@pytest.fixture
+def conversation(tmp_path, monkeypatch):
+    for key in list(os.environ):
+        if key.startswith('SDLC_AGENT_'):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('SDLC_AGENT_PROVIDER', 'google')
+    monkeypatch.setenv('SDLC_AGENT_ASSISTANT_MODEL', 'scripted-assistant')
+    monkeypatch.setenv('SDLC_AGENT_REVIEWER_MODEL', 'scripted-reviewer')
+    monkeypatch.setenv('SDLC_AGENT_SESSION_DIR', str(tmp_path / 'sessions'))
+    path = tmp_path / 'conversation.sqlite3'
+    accounts = Accounts(path)
+    accounts.register('flow-user', 'Flow user', 'isolated-flow-password')
+    token = accounts.login('flow-user', 'isolated-flow-password')
+    workspace = accounts.spaces(token)[0]['id']
+    project = Service(path, token=token, workspace_id=workspace).create_project('便签回归', '')
+    service = TestingService(path, token, workspace, project)
+    task_id = service.create_task(PRD, '验证便签创建与删除')
+    return service, ChatService(service), task_id
+
+
+def execute_next(service, client, *, task_id=None, observe=None):
+    owner = 'conversation-worker'
+    job = worker.claim(service.db_path, owner)
+    assert job is not None, 'the user action must leave executable durable work'
+    if task_id:
+        assert job['task_id'] == task_id
+
+    def factory(path, token, workspace, project, task, *, execution_guard,
+                capability, public_event_sink):
+        def sink(event):
+            public_event_sink(event)
+            if observe:
+                observe(event)
+
+        return build_runtime(path, token, workspace, project, task,
+                             model_client=client, execution_guard=execution_guard,
+                             capability=capability, public_event_sink=sink)
+
+    worker.execute(service.db_path, job, owner, runtime_factory=factory)
+    record = next(item for item in worker.list_work(service, job['task_id']) if item['id'] == job['id'])
+    assert record['status'] == 'completed', record.get('error') or record
+    assert not client.outputs, 'the intended model response was never consumed'
+    return job
+
+
+def assistant_replies(chat, task_id):
+    return [message for message in chat.list_messages(task_id)
+            if message['role'] == 'assistant' and message['kind'] != 'progress']
+
+
+def test_natural_continue_after_agent_question_calls_model_and_streams_before_completion(conversation):
+    service, chat, task_id = conversation
+    ask = ConversationModel(AssistantMessage(tool_calls=[ToolCall(
+        id='ask-scope', name='request_user_confirmation',
+        arguments={'question': '这轮先验证创建和删除，继续吗？'})]), Decision(should_allow=True))
+    worker.enqueue(service, task_id, request_key='initial-request')
+    execute_next(service, ask, task_id=task_id)
+    pending = chat.get_pending(task_id)
+    assert pending and pending['kind'] == 'generation_plan'
+
+    original_reply = '  好的，继续。  '
+    accepted = chat.respond(task_id, pending['id'], 'discuss', original_reply,
+                            expected_revision=pending['revision'], request_key='natural-consent')
+    assert chat.respond(task_id, pending['id'], 'discuss', original_reply,
+                        expected_revision=pending['revision'], request_key='natural-consent') == accepted
+    answer = '已收到你的确认，接下来处理便签创建和删除测试。'
+    followup = ConversationModel(MessageIntent(intent='continue_generation', confidence=.99,
+        explicit_confirmation=True, evidence_quote='继续'), AssistantMessage(content=answer))
+    live = []
+
+    def observe(event):
+        if event['type'] == 'assistant_delta':
+            replies = assistant_replies(ChatService(service), task_id)
+            live.append((replies[-1]['content'], replies[-1]['state'],
+                         worker.list_work(service, task_id)[0]['status']))
+
+    job = execute_next(service, followup, task_id=task_id, observe=observe)
+    assert job['id'] == accepted['job_id']
+    assert live == [(answer[:2], 'streaming', 'running'), (answer, 'streaming', 'running')]
+    assert assistant_replies(chat, task_id)[-1]['content'] == answer
+    assert assistant_replies(chat, task_id)[-1]['state'] == 'completed'
+    assert chat.get_pending(task_id) is None
+    assert service.get_task(task_id)['status'] == 'partial'
+    assert chat.list_confirmations(task_id)[0]['choice'] == 'retry'
+    assert json.loads(followup.contexts[0].messages[0].content)['original_user_message'] == original_reply
+    assert followup.contexts[-1].messages[-1].content == original_reply
+    assert worker.claim(service.db_path, 'no-auto-repeat') is None
+
+
+def test_provider_failure_has_actionable_confirmation_and_chat_retry_reaches_model(conversation):
+    service, chat, task_id = conversation
+    worker.enqueue(service, task_id, request_key='first-turn')
+    execute_next(service, ConversationModel(TimeoutError('private-upstream-token')), task_id=task_id)
+    pending = chat.get_pending(task_id)
+    assert pending and pending['kind'] == 'retry_generation'
+    assert pending['prompt'] and pending['choices']
+    assert 'private-upstream-token' not in str(chat.list_messages(task_id))
+    assert worker.claim(service.db_path, 'must-wait-for-user') is None
+
+    content = '继续，重试刚才未完成的步骤。'
+    response = chat.respond(task_id, pending['id'], 'discuss', content,
+                            expected_revision=pending['revision'], request_key='user-retry')
+    client = ConversationModel(MessageIntent(intent='continue_generation', confidence=.99,
+        explicit_confirmation=True, evidence_quote='继续'),
+        AssistantMessage(content='已继续处理，上一轮失败没有覆盖已有成果。'))
+    execute_next(service, client, task_id=task_id)
+    assert any(message['role'] == 'user' and message['content'] == content
+               for message in chat.list_messages(task_id))
+    assert assistant_replies(chat, task_id)[-1]['content'].startswith('已继续处理')
+    assert chat.get_pending(task_id) is None
+    assert service.get_task(task_id)['status'] not in {'queued', 'running', 'failed', 'waiting_confirmation'}
+    assert [item['id'] for item in worker.list_work(service, task_id)].count(response['job_id']) == 1
+
+
+def test_each_ordinary_chat_turn_is_classified_and_answered_without_fixed_continue_rule(conversation):
+    service, chat, task_id = conversation
+    worker.enqueue(service, task_id)
+    execute_next(service, ConversationModel(AssistantMessage(content='已阅读便签需求。')), task_id=task_id)
+    for index, (content, answer) in enumerate([
+        ('继续', '我将结合当前便签需求继续推进。'),
+        ('先解释删除操作的风险', '删除用例需要检查操作对象与当前用户的归属关系。'),
+    ]):
+        client = ConversationModel(MessageIntent(intent='conversation', confidence=.99),
+                                   AssistantMessage(content=answer))
+        worker.enqueue(service, task_id, 'message', content, request_key=f'ordinary-{index}')
+        execute_next(service, client, task_id=task_id)
+        assert json.loads(client.contexts[0].messages[0].content)['original_user_message'] == content
+        assert client.contexts[-1].messages[-1].content == content
+        assert assistant_replies(chat, task_id)[-1]['content'] == answer
+        assert ''.join(client.streams) == answer
+        assert chat.get_pending(task_id) is None
+        assert service.get_task(task_id)['status'] == 'partial'
+
+
+@pytest.mark.parametrize('old_state', ['failed', 'waiting_confirmation'])
+def test_continue_recovers_old_waiting_task_without_invisible_confirmation(conversation, old_state):
+    service, chat, task_id = conversation
+    service.set_state(task_id, old_state, error='旧版本任务中断', next_action='等待确认下一步')
+    assert chat.get_pending(task_id) is None
+    content = '继续'
+    worker.enqueue(service, task_id, 'message', content, request_key='recover-old-' + old_state)
+    client = ConversationModel(MessageIntent(intent='continue_generation', confidence=.99,
+        explicit_confirmation=True, evidence_quote=content),
+        AssistantMessage(content='已恢复这轮便签测试准备，我会从已有成果继续。'))
+    execute_next(service, client, task_id=task_id)
+    assert assistant_replies(chat, task_id)[-1]['content'].startswith('已恢复')
+    assert chat.get_pending(task_id) is None
+    assert service.get_task(task_id)['status'] == 'partial'
+    assert len(service.list_tasks()) == 1
+    assert worker.claim(service.db_path, 'no-repeat') is None
+
+
+def test_asking_about_failure_then_continue_still_reaches_a_fresh_model_turn(conversation):
+    service, chat, task_id = conversation
+    worker.enqueue(service, task_id)
+    execute_next(service, ConversationModel(TimeoutError('private-body')), task_id=task_id)
+    assert chat.get_pending(task_id)
+    question = '为什么刚才失败了？先解释一下。'
+    worker.enqueue(service, task_id, 'message', question, request_key='why-failed')
+    explanation = ConversationModel(MessageIntent(intent='conversation', confidence=.99),
+        AssistantMessage(content='上次模型请求未完成，已有成果保留。你可以继续，或补充新的范围。'))
+    execute_next(service, explanation, task_id=task_id)
+    assert chat.list_confirmations(task_id)[0]['choice'] == 'discuss'
+    assert chat.get_pending(task_id) is None
+
+    content = '好的，继续重试。'
+    worker.enqueue(service, task_id, 'message', content, request_key='continue-after-explanation')
+    client = ConversationModel(MessageIntent(intent='continue_generation', confidence=.99,
+        explicit_confirmation=True, evidence_quote='继续重试'),
+        AssistantMessage(content='收到，我会重试尚未完成的部分。'))
+    execute_next(service, client, task_id=task_id)
+    intake = json.loads(client.contexts[0].messages[0].content)
+    assert intake['previous_confirmation']['kind'] == 'retry_generation'
+    assert intake['original_user_message'] == content
+    assert assistant_replies(chat, task_id)[-1]['content'].startswith('收到')
+    assert service.get_task(task_id)['status'] == 'partial'
+    assert chat.list_confirmations(task_id)[0]['choice'] == 'retry'
+
+
+def test_confirming_all_requirements_enqueues_one_child_and_generates_reviewable_cases(conversation):
+    service, chat, task_id = conversation
+    source = service.get_task(task_id)['input']['paragraphs']
+    p_create, p_delete = source[1]['id'], source[2]['id']
+    initial_analysis = {
+        'features': [{'id': 'F1', 'description': '便签创建与删除',
+                      'paragraph_ids': [p_create, p_delete]}],
+        'roles': [{'id': 'ROLE1', 'name': '用户', 'responsibilities': ['管理本人便签'],
+                   'paragraph_ids': [p_create, p_delete]}],
+        'business_rules': [
+            {'id': 'R1', 'statement': '用户可以创建便签，标题上限待确认',
+             'status': 'incomplete', 'paragraph_ids': [p_create]},
+            {'id': 'R2', 'statement': '用户可以删除本人便签，确认操作待明确',
+             'status': 'incomplete', 'paragraph_ids': [p_delete]}],
+        'clarifications': [
+            {'id': 'Q1', 'question': '便签标题的长度上限是多少？',
+             'paragraph_ids': [p_create], 'requirement_ids': ['R1'],
+             'affected_case_ids': [], 'scope': 'run', 'blocking': True, 'rationale': None},
+            {'id': 'Q2', 'question': '删除便签前是否需要确认？',
+             'paragraph_ids': [p_delete], 'requirement_ids': ['R2'],
+             'affected_case_ids': [], 'scope': 'run', 'blocking': True, 'rationale': None}],
+        'risks': []}
+    service.save_analysis(task_id, initial_analysis)
+    service.set_state(task_id, 'waiting_answer', next_action='请补充两项需求')
+    pending = chat.request_confirmation(task_id, kind='generation_plan', prompt='补齐需求后继续。')
+    supplements = {'Q1': '便签标题最多100个字符。',
+                   'Q2': '删除本人便签必须二次确认，确认后删除。'}
+    for question in service.get_task(task_id)['questions']:
+        service.submit_answer(task_id, question['id'], supplements[question['id']],
+                              expected_revision=question['revision'])
+    revisions = {question['id']: question['revision']
+                 for question in service.get_task(task_id)['questions']}
+
+    accepted = service.confirm_answers_and_continue(task_id, revisions, '产品负责人确认两项补充')
+    assert service.confirm_answers_and_continue(task_id, revisions, '重复提交同一批确认') == accepted
+    child_id = accepted['task_id']
+    assert child_id != task_id and len(service.list_tasks()) == 2
+    child = service.get_task(child_id)
+    assert all(text in child['input']['normalized_text'] for text in supplements.values())
+    assert child['status'] == 'queued' and chat.get_pending(child_id) is None
+    assert chat.get_pending(task_id) is None
+    assert chat.list_confirmations(task_id)[0]['id'] == pending['id']
+    assert chat.list_confirmations(task_id)[0]['followup_task_id'] == child_id
+    assert service.get_task(task_id)['input']['original_text'] == PRD
+    queued = worker.list_work(service, child_id)
+    assert len(queued) == 1 and queued[0]['id'] == accepted['job_id']
+
+    paragraphs = child['input']['paragraphs']
+    rule_paragraphs = {
+        rule_id: [base] + [p['id'] for p in paragraphs if supplement in p['text']]
+        for rule_id, base, supplement in [('R1', p_create, supplements['Q1']),
+                                          ('R2', p_delete, supplements['Q2'])]}
+    resolved = {**initial_analysis,
+        'business_rules': [{'id': rid, 'statement': supplements[qid], 'status': 'clear',
+                            'paragraph_ids': rule_paragraphs[rid]}
+                           for rid, qid in [('R1', 'Q1'), ('R2', 'Q2')]],
+        'clarifications': []}
+    conditions = [{'id': 'C' + str(index), 'module': '便签', 'description': description,
+                   'requirement_ids': [rid], 'paragraph_ids': rule_paragraphs[rid],
+                   'method': 'scenario', 'priority': 'P1', 'status': 'planned',
+                   'rationale': '验证已确认的便签规则'}
+                  for index, rid, description in [(1, 'R1', '创建100字符标题的便签'),
+                                                   (2, 'R2', '确认后删除本人便签')]]
+    cases = []
+    for condition, precondition, step, expected in [
+        (conditions[0], '准备100字符的虚构便签标题', '用户填写标题并提交创建便签', '便签保存成功'),
+        (conditions[1], '用户已有一条自己创建的虚构便签', '用户删除该便签并确认删除', '该便签被删除')]:
+        cases.append({'case': {
+            'case_id': 'TC-' + condition['id'], 'title': condition['description'],
+            'requirement_ids': condition['requirement_ids'], 'paragraph_ids': condition['paragraph_ids'],
+            'preconditions': [precondition], 'steps': [{'number': 1, 'action': step}],
+            'expected_results': [expected], 'priority': 'P1', 'category': '正常',
+            'readiness': 'ready', 'clarification_ids': []},
+            'condition_ids': [condition['id']], 'role': '用户',
+            'test_data': ['虚构便签'], 'cleanup': [], 'method': 'scenario'})
+
+    def call(number, name, arguments=None):
+        return AssistantMessage(tool_calls=[ToolCall(id='call-' + str(number),
+            name=name, arguments=arguments or {})])
+
+    client = ConversationModel(
+        call(1, 'analyze_requirements'), Decision(should_allow=True),
+        DocumentContext(target_product='便签管理', document_purpose='定义便签管理行为'),
+        RequirementAnalysis.model_validate(resolved),
+        call(2, 'plan_coverage'), Decision(should_allow=True), CoveragePlan(conditions=conditions),
+        call(3, 'generate_case_batch', {'module': '便签', 'condition_ids': ['C1', 'C2'], 'batch_key': 'notes'}),
+        Decision(should_allow=True), CaseBatch(cases=cases),
+        call(4, 'finalize_design'), Decision(should_allow=True), EvidenceReview(findings=[]),
+        AssistantMessage(content='两项需求补充已纳入本轮，2条便签用例已生成，请审核。'))
+    execute_next(service, client, task_id=child_id)
+    final = service.get_task(child_id)
+    assert final['status'] == 'waiting_review' and final['run_id']
+    assert chat.get_pending(child_id) is None
+    assert not [q for q in final['questions'] if q['status'] in {'open', 'answered'}]
+    run = service.legacy.get_run(final['run_id'])
+    assert len(run['cases']) == 2
+    assert all(case['status'] == 'pending_review' for case in run['cases'])
+    assert assistant_replies(chat, child_id)[-1]['content'].startswith('两项需求补充已纳入本轮')
+    assert worker.claim(service.db_path, 'no-orphan-work') is None
+
+
+def test_completed_task_accepts_streamed_chat_without_reopening_approval(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed',stage='delivery' WHERE id=?", (task_id,))
+    before = service.get_task(task_id)
+    worker.enqueue(service, task_id, 'message', '解释一下已交付的测试范围', request_key='after-approval-chat')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+                               AssistantMessage(content='我可以继续解释已交付成果，批准记录保持不变。'))
+    execute_next(service, client, task_id=task_id)
+    after = service.get_task(task_id)
+    assert after['status'] == 'completed'
+    assert after['revision'] == before['revision']
+    assert after['run_id'] == before['run_id']
+    assert assistant_replies(chat, task_id)[-1]['content'] == '我可以继续解释已交付成果，批准记录保持不变。'
+    assert client.streams
+    with pytest.raises(ValueError, match='取消或完成'):
+        service.add_artifact(task_id, 'case_batch', {'cases': []}, 'cannot-change-approved')
+    assert all(tool.name.startswith('read_') or tool.name in {'list_test_cases', 'get_test_case', 'list_platform_items', 'platform_action_catalog',
+                                            'propose_platform_action', 'show_blocking_clarifications', 'prepare_clarification_answers', 'open_account_page'}
+               for tool in client.contexts[-1].tools)
+    with pytest.raises(ValueError, match='取消或完成'):
+        worker.enqueue(service, task_id, 'start', request_key='cannot-rerun-approved')
+
+
+def test_completed_task_new_requirements_create_child_preserving_parent(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed',stage='delivery' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '新增规则：标题最多20字。', request_key='after-approval-change')
+    execute_next(service, ConversationModel(MessageIntent(intent='requirements_append', confidence=1)), task_id=task_id)
+    parent = service.get_task(task_id)
+    assert parent['status'] == 'completed'
+    handoff = next(a for a in parent['artifacts'] if a['kind'] == 'handoff')
+    child = service.get_task(handoff['content']['child_task_id'])
+    assert child['parent_task_id'] == task_id
+    assert child['status'] == 'queued'
+    assert '新增规则：标题最多20字。' in child['input']['original_text']
+    assert '新增规则：标题最多20字。' not in parent['input']['original_text']
+
+
+def test_case_cards_survive_failure_after_successful_query(conversation):
+    service, chat, task_id = conversation
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='query-before-failure')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='我来查询当前项目的批准用例。', tool_calls=[
+            ToolCall(id='query-approved', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
+        RuntimeError('provider unavailable'))
+    # The business result is durable before the next model turn fails.
+    owner = 'query-worker'
+    job = worker.claim(service.db_path, owner)
+    worker.execute(service.db_path, job, owner, runtime_factory=lambda path, token, workspace, project, task, **options:
+        build_runtime(path, token, workspace, project, task, model_client=client, **options))
+    messages = chat.list_messages(task_id)
+    card = next(m for m in messages if m['kind'] == 'case_collection')
+    assert card['state'] == 'completed'
+    assert json.loads(card['content'])['query']['status'] == 'approved'
+    assert not client.outputs
+
+
+def test_approved_project_query_uses_authorization_not_model_review(conversation):
+    from tests.test_testing_agent import ready
+    service, chat, _ = conversation
+    task_id = ready(service)
+    run = service.finalize_design(task_id)
+    for case in service.legacy.get_run(run)['cases']:
+        service.legacy.review(run, case['case_id'], case['version'], case['revision'],
+                              'approve', '', '符合需求', 'approved-query-' + case['case_id'])
+    service.create_baseline(task_id)
+    service.record_event(task_id, {'type': 'model_call', 'usage': {'total_tokens': 193268}})
+    worker.enqueue(service, task_id, 'message', '展示本项目全部已批准用例', request_key='approved-real-query')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='我来读取本项目的批准用例。', tool_calls=[ToolCall(
+            id='approved-project', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
+        AssistantMessage(content='已在聊天中展示批准用例。'))
+    execute_next(service, client, task_id=task_id)
+    assert not any(context.output_type is Decision for context in client.contexts)
+    payload = json.loads(next(m for m in chat.list_messages(task_id) if m['kind'] == 'case_collection')['content'])
+    assert len(payload['shown_references']) == 2
+    task = service.get_task(task_id)
+    assert task['status'] == 'completed'
+    calls = [e['details'] for e in task['events'] if e['action'] == 'model_call']
+    assert calls[0]['usage']['total_tokens'] == 193268
+    assert all(c['budget_scope'] == 'conversation' for c in calls[1:])
+    assert any(e['action'] == 'tool_policy_reviewed' and e['details']['allowed'] for e in task['events'])
+
+
+def test_query_policy_still_denies_foreign_project_case(conversation):
+    from tests.test_testing_agent import ready
+    service, chat, task_id = conversation
+    project = service.legacy.create_project('其他授权边界', '')
+    other = TestingService(service.db_path, service.token, service.workspace_id, project)
+    foreign_run = other.finalize_design(ready(other))
+    worker.enqueue(service, task_id, 'message', '查看用例', request_key='foreign-query')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='读取用例。', tool_calls=[ToolCall(
+            id='foreign-case', name='get_test_case', arguments={'run_id': foreign_run, 'case_id': 'TC1'})]))
+    execute_next(service, client, task_id=task_id)
+    assert not any(m['kind'] == 'case_collection' for m in chat.list_messages(task_id))
+    assert any(e['action'] == 'tool_policy_reviewed' and not e['details']['allowed']
+               for e in service.get_task(task_id)['events'])
+
+
+def test_completed_chat_budget_exhaustion_is_visible_not_silently_discarded(conversation, monkeypatch):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    monkeypatch.setenv('SDLC_AGENT_CHAT_MAX_TOTAL_TOKENS', '1')
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='visible-chat-budget')
+    execute_next(service, ConversationModel(), task_id=task_id)
+    assert any('本次对话达到处理预算上限' in m['content'] for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+    assert not chat.get_pending(task_id)
+
+
+@pytest.mark.parametrize('terminal_status', ['cancelled', 'failed', 'completed'])
+def test_new_query_recovers_stranded_completed_chat_without_replaying_old_calls(conversation, terminal_status):
+    service, chat, task_id = conversation
+    # Model a stopped worker that had persisted a running turn and a pending call.
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    old_job = worker.enqueue(service, task_id, 'message', '旧查询', request_key='interrupted-old-query')
+    runtime = build_runtime(service.db_path, service.token, service.workspace_id, service.project_id,
+                            task_id, model_client=ConversationModel())
+    session = runtime.agent.new_session({'task_id': task_id, 'workspace_id': service.workspace_id,
+                                         'project_id': service.project_id})
+    session.metadata['agent_turn'] = {'id': 'stranded-turn', 'status': 'running', 'request_id': old_job}
+    runtime.agent._append(session, AssistantMessage(content='旧调用', tool_calls=[
+        ToolCall(id='abandoned-call', name='list_test_cases', arguments={'status': 'returned', 'scope': 'task', 'display_only': False})]))
+    with service.connection('generate', True) as db:
+        db.execute('UPDATE testing_agent_tasks SET session_id=? WHERE id=?', (session.id, task_id))
+        db.execute('UPDATE agent_work_items SET status=? WHERE id=?', (terminal_status, old_job))
+    worker.enqueue(service, task_id, 'message', '展示所有已批准用例', request_key='query-after-interruption')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='查询最新的批准状态。', tool_calls=[ToolCall(
+            id='fresh-query', name='list_test_cases', arguments={'status': 'approved', 'scope': 'project', 'display_only': False})]),
+        AssistantMessage(content='查询结果已直接显示。'))
+    execute_next(service, client, task_id=task_id)
+    cards = [json.loads(m['content']) for m in chat.list_messages(task_id) if m['kind'] == 'case_collection']
+    assert len(cards) == 1
+    assert cards[0]['query']['status'] == 'approved'
+    after = runtime.agent.get_session(session.id)
+    old_results = [m for m in after.messages if m.role == 'tool' and m.tool_call_id == 'abandoned-call']
+    assert len(old_results) == 1 and old_results[0].is_error
+    assert any(e['action'] == 'orphaned_turn_recovered' and not e['details']['old_calls_replayed']
+               for e in service.get_task(task_id)['events'])
+
+
+def test_agent_can_choose_direct_card_delivery_without_followup_model_call(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '只展示本项目已批准用例', request_key='direct-display')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(content='直接展示批准用例。', tool_calls=[ToolCall(
+            id='direct-query', name='list_test_cases', arguments={
+                'status': 'approved', 'scope': 'project', 'display_only': True})]))
+    execute_next(service, client, task_id=task_id)
+    assert len(client.contexts) == 2  # Intent and the Agent's chosen action; no rewrite call.
+    assert any(m['kind'] == 'case_collection' for m in chat.list_messages(task_id))
+    assert not any(m['state'] == 'error' for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+
+
+def test_agent_corrects_omitted_new_query_argument_before_direct_card_delivery(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    worker.enqueue(service, task_id, 'message', '展示已批准用例', request_key='repair-query-shape')
+    client = ConversationModel(MessageIntent(intent='conversation', confidence=1),
+        AssistantMessage(tool_calls=[ToolCall(id='stale-query', name='list_test_cases',
+            arguments={'status': 'approved', 'scope': 'project'})]),
+        AssistantMessage(tool_calls=[ToolCall(id='correct-query', name='list_test_cases',
+            arguments={'status': 'approved', 'scope': 'project', 'display_only': True})]))
+    execute_next(service, client, task_id=task_id)
+    assert len(client.contexts) == 3  # Intent, old call, model-corrected call; no rewrite.
+    feedback = [m.content for m in client.contexts[-1].messages if m.role == 'tool']
+    assert any('缺少必填参数：display_only' in content for content in feedback)
+    assert len([m for m in chat.list_messages(task_id) if m['kind'] == 'case_collection']) == 1
+    assert not any(m['state'] == 'error' for m in chat.list_messages(task_id))
+    assert service.get_task(task_id)['status'] == 'completed'
+
+
+def test_completed_chat_failure_notice_replaces_core_notice_instead_of_duplicating(conversation):
+    service, chat, task_id = conversation
+    with service.connection('generate', True) as db:
+        db.execute("UPDATE testing_agent_tasks SET status='completed' WHERE id=?", (task_id,))
+    chat.handle_event(task_id, {'type': 'assistant_message', 'message_id': 'failure',
+                               'content': '原错误提示'}, request_key='failure-request')
+    chat.handle_event(task_id, {'type': 'waiting_confirmation', 'message_id': 'failure',
+                               'kind': 'retry_generation', 'error': 'model unavailable'}, request_key='failure-request')
+    replies = assistant_replies(chat, task_id)
+    assert len(replies) == 1
+    assert replies[0]['state'] == 'error'
+    assert '本次回复暂未完成' in replies[0]['content']

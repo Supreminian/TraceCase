@@ -32,7 +32,10 @@ def render_export(run, cases, approvals, export_id, fmt):
         "expected_results", "priority", "category", "approved_by", "approved_at",
         "approval_event_id",
         "coverage_note",
+        "execution_status",
     ]
+    delivery = run.get('delivery_details') or {}
+    extra_fields = ['task_id', 'baseline_id', 'document_version', 'scope', 'role', 'condition_ids', 'test_data', 'cleanup', 'method'] if delivery else []
     rows = []
     for case in cases:
         c = case["content"]
@@ -43,8 +46,13 @@ def render_export(run, cases, approvals, export_id, fmt):
             ", ".join(c["paragraph_ids"]), "\n".join(c["preconditions"]),
             "\n".join(f'{s["number"]}. {s["action"]}' for s in c["steps"]),
             "\n".join(c["expected_results"]), c["priority"], c["category"],
-            approval["operator"], approval["created_at"], approval["id"], coverage_note,
+            approval["operator"], approval["created_at"], approval["id"], coverage_note, 'not_executed',
         ], strict=True)))
+        if delivery:
+            details = (delivery.get('case_details') or {}).get(c['case_id'], {})
+            rows[-1].update({key: delivery.get(key, '') for key in extra_fields[:4]})
+            rows[-1].update({key: '\n'.join(details.get(key, [])) if key in {'condition_ids', 'test_data', 'cleanup'} else details.get(key, '') for key in extra_fields[4:]})
+    fields += extra_fields
     if fmt == "csv":
         stream = io.StringIO(newline="")
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -58,6 +66,7 @@ def render_export(run, cases, approvals, export_id, fmt):
         f'Prompt：{md(run["prompt"]["version"])}  ',
         f'输入 SHA-256：{md(run["input"]["input_hash"])}', "",
         "此文件保存导出当时的批准版本。后续修订不会改变本快照。", "",
+        "状态说明：用例设计已评审批准；测试尚未执行。", "",
         "需求覆盖说明：" + md(coverage_note), "",
         "| 编号 | 版本 | 标题 | 需求 / 段落 | 优先级 | 分类 | 通过人 | 通过时间 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -69,9 +78,17 @@ def render_export(run, cases, approvals, export_id, fmt):
         lines.append("| " + " | ".join(md(value) for value in values) + " |")
     for row in rows:
         lines += ["", f'## {md(row["case_id"])} · {md(row["title"])}', ""]
-        for label, key in [("前置条件", "preconditions"), ("步骤", "steps"), ("预期", "expected_results")]:
+        detail_fields = [('执行角色', 'role'), ('测试数据准备', 'test_data')] if delivery else []
+        detail_fields += [("前置条件", "preconditions"), ("步骤", "steps"), ("预期", "expected_results")]
+        if delivery:
+            detail_fields += [('清理与恢复', 'cleanup'), ('测试条件', 'condition_ids'), ('测试方法', 'method')]
+        for label, key in detail_fields:
             lines += [f"**{label}**", "", md(row[key]), ""]
         lines.append(f'审批事件：{md(row["approval_event_id"])}')
+    if delivery:
+        lines += ['', '## 批准基线与范围', '',
+                  '任务：' + md(delivery['task_id']), '基线：' + md(delivery['baseline_id']),
+                  '需求版本：' + md(delivery['document_version']), '范围：' + md(delivery['scope'])]
     lines += ["", "## 来源段落", ""]
     for p in run["input"]["paragraphs"]:
         lines += [f'### {md(p["id"])}', "", md(p["text"]), ""]

@@ -23,6 +23,7 @@ from sdlc.project_ui import project_changed, projects_view, overview, project_ca
 
 ROOT = Path(__file__).resolve().parent
 PAGES = ["新建运行", "运行详情与审核", "运行历史", "项目概览", "项目用例", "导出记录", "项目列表"]
+PAGES.append("测试任务")
 STATUS = {"pending_review": "待审核", "approved": "已通过", "returned": "已退回"}
 CATEGORY = {"normal": "正常", "boundary": "边界", "exception": "异常", "security": "安全",
             "performance": "性能", "usability": "易用性", "compatibility": "兼容性"}
@@ -814,7 +815,7 @@ def main() -> None:
                                      format_func=lambda pid: next(p["name"] + ("（已归档）" if p["status"] == "archived" else "")
                                                                   for p in projects if p["id"] == pid))
             if project_id:
-                page = st.radio("项目功能", PAGES, key="page")
+                page = st.radio("项目功能", ["测试任务"] + [p for p in PAGES if p != "测试任务"], key="page")
             else:
                 st.session_state['page'] = '项目列表'
                 page = '项目列表'
@@ -835,7 +836,10 @@ def main() -> None:
         st.caption("当前项目 / " + project["name"])
         if project["status"] == "archived":
             st.warning("此项目已归档，只能查看与下载已有快照；请在项目列表恢复后继续处理。")
-        if page == "新建运行":
+        if page == "测试任务":
+            from sdlc.testing_agent.ui import workspace
+            workspace(service)
+        elif page == "新建运行":
             if project["status"] == "active" and "generate" in service.user["permissions"]:
                 draft = st.session_state.get("_project_drafts", {}).get(project_id, {})
                 for key in ("prd_text", "parent_run_id", "input_source"):

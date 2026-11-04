@@ -187,7 +187,8 @@ class Accounts:
     def authorize(db, token, workspace_id, capability='view'):
         user = Accounts.identity(db, token)
         row = db.execute('''SELECT m.*,w.archived,w.kind FROM memberships m JOIN workspaces w
-            ON w.id=m.workspace_id WHERE m.user_id=? AND m.workspace_id=?''',
+            ON w.id=m.workspace_id WHERE m.user_id=? AND m.workspace_id=?
+            AND (w.kind='team' OR w.owner_id=m.user_id)''',
             (user['id'], workspace_id)).fetchone()
         if not row:
             raise AccessError('无权访问此工作空间。')
@@ -303,13 +304,15 @@ class Accounts:
         with self.db() as db:
             user = self.identity(db, token)
             return [dict(r) for r in db.execute('''SELECT w.*,m.role FROM workspaces w JOIN memberships m
-                ON m.workspace_id=w.id WHERE m.user_id=? ORDER BY w.kind,w.name,w.id''', (user['id'],))]
+                ON m.workspace_id=w.id WHERE m.user_id=? AND (w.kind='team' OR w.owner_id=m.user_id)
+                ORDER BY w.kind,w.name,w.id''', (user['id'],))]
 
     def preferred_space(self, token):
         with self.db() as db:
             user = self.identity(db, token)
             row = db.execute("""SELECT p.workspace_id FROM workspace_preferences p JOIN memberships m
-                ON m.workspace_id=p.workspace_id AND m.user_id=p.user_id WHERE p.user_id=?""", (user['id'],)).fetchone()
+                ON m.workspace_id=p.workspace_id AND m.user_id=p.user_id JOIN workspaces w ON w.id=p.workspace_id
+                WHERE p.user_id=? AND (w.kind='team' OR w.owner_id=m.user_id)""", (user['id'],)).fetchone()
             return row[0] if row else None
 
     def choose_space(self, token, workspace):

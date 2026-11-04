@@ -23,7 +23,8 @@ def project_changed():
     if target:
         st.session_state.update(drafts.get(target, {}))
     st.session_state['_active_project'] = target
-    st.session_state['page'] = '项目概览' if target else '项目列表'
+    st.session_state['page'] = '测试任务' if target else '项目列表'
+    st.session_state.pop('_agent_create', None)
 
 
 def upload_changed(project_id):
